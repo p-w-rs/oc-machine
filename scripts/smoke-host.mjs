@@ -1,6 +1,7 @@
-// End-to-end check against a real OpenCode CLI (pinned version) in an isolated home, driven by a scripted local
-// model (not a real LLM). It verifies the plugin loads, its tools run, and new shells receive the env vars.
-// The CLI for this platform is installed on demand into .local/host; it is not a project dependency.
+// End-to-end check against a real OpenCode CLI (pinned version) in an isolated home, driven by a scripted local model
+// (not a real LLM) and a throwaway sshd on 127.0.0.1. Verifies: tools load and run, the inventory in the tool
+// description updates live, native shell commands get env vars and ssh only when they reference them, denied values
+// are skipped with a note, and secrets are masked in output. Run with: node --import tsx scripts/smoke-host.mjs
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
 import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
@@ -8,7 +9,8 @@ import { createServer } from "node:http"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { Vault } from "oc-secure-kit"
+import { PolicyStore, Vault } from "oc-secure-kit"
+import { startSshd } from "../plugin/testsshd.ts"
 
 const OPENCODE_VERSION = "2.2.6"
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
@@ -27,25 +29,37 @@ const home = path.join(base, "home"), workspace = path.join(base, "workspace")
 await mkdir(workspace, { recursive: true }); await mkdir(path.join(home, "config", "opencode"), { recursive: true })
 const dataDir = path.join(home, "data", "oc-machine")
 const SECRET = "smoke-secret-value-8c1f"
+const sshd = await startSshd()
 
-// The user stored this secret earlier (e.g. with `pixi run secret-set`); the agent only ever sees "set".
-await (await Vault.open({ dir: dataDir, plugin: "oc-machine" })).set("here", "env:OCM_SMOKE_SECRET", SECRET)
+// What the user did beforehand (GUI / pixi run secret-set): stored secrets and one deny cell.
+const vault = await Vault.open({ dir: dataDir, plugin: "oc-machine" })
+await vault.set("env:SMOKE_SECRET", "value", SECRET)
+await vault.set("env:SMOKE_DENIED", "value", "denied-value-0000")
+await vault.set("box", "key-passphrase", sshd.passphrase)
+await (await PolicyStore.open(dataDir)).setCells([{ entity: "env:SMOKE_DENIED", row: { agent: "*" }, capability: "use", effect: "deny" }])
 
 const calls = [
-  { name: "machine_upsert", input: { id: "here", local: true, ssh: { host: "127.0.0.1", user: "smoke", forwardX11: true }, env: [{ name: "OCM_SMOKE_PLAIN", value: "plain-value" }, { name: "OCM_SMOKE_SECRET", secret: true }] } },
-  { name: "machine_get", input: { id: "here" } },
-  { name: "shell", input: { description: "Read injected env", command: 'printf "%s|%s|%s\\n" "$OCM_SMOKE_PLAIN" "$OCM_SSH_CONFIG" "$OCM_SMOKE_SECRET" > shell-env.txt && ssh -G -F "$OCM_SSH_CONFIG" here | grep -E "^(hostname|user|forwardx11) " >> shell-env.txt' } },
+  { name: "machine_env_set", input: { name: "SMOKE_PLAIN", description: "Plain smoke value", value: "plain-value" } },
+  { name: "machine_env_set", input: { name: "SMOKE_SECRET", description: "Smoke test API token", secret: true } },
+  { name: "machine_env_set", input: { name: "SMOKE_DENIED", description: "Denied token", secret: true } },
+  { name: "machine_upsert", input: { id: "box", label: "Smoke sshd", ssh: { host: "127.0.0.1", port: sshd.port, user: sshd.user, auth: "key", identityFile: sshd.clientKey, options: { UserKnownHostsFile: path.join(base, "known_hosts") } } } },
+  { name: "shell", input: { description: "Use env vars and ssh", command: 'echo "local=$SMOKE_PLAIN secret=$SMOKE_SECRET denied=[$SMOKE_DENIED]"; ssh -F "$OCM_SSH_CONFIG" box "echo remote-$SMOKE_PLAIN-\\$(id -un)"' } },
+  { name: "shell", input: { description: "Plain command", command: "env | grep -E '^(SMOKE_|OCM_|SSH_ASKPASS)' | cut -d= -f1 > plain-env.txt; echo plain-done" } },
+  { name: "machine_test", input: { id: "box" } },
 ]
 const toolResults = []
+const descriptions = []
 let modelRequests = 0
 const server = createServer(async (req, res) => {
   const chunks = []
   for await (const part of req) chunks.push(part)
   let body
   try { body = JSON.parse(Buffer.concat(chunks).toString()) } catch { res.writeHead(400); res.end(); return }
-  const main = Array.isArray(body.tools) && body.tools.some(tool => tool.function?.name === "machine_upsert")
+  const main = Array.isArray(body.tools) && body.tools.some(tool => tool.function?.name === "machine_list")
   if (main) {
     modelRequests++
+    descriptions.push(body.tools.find(tool => tool.function?.name === "machine_list").function.description)
+    toolResults.length = 0
     for (const message of body.messages ?? []) if (message.role === "tool") toolResults.push(typeof message.content === "string" ? message.content : JSON.stringify(message.content))
   }
   const call = main ? calls.shift() : undefined
@@ -81,9 +95,9 @@ const env = {
 let stdout = "", stderr = ""
 const child = spawn(binary, ["run", "--standalone", "--auto", "--format", "json", "--model", "probe/probe", "oc-machine smoke"], { cwd: workspace, env, detached: true, stdio: ["ignore", "pipe", "pipe"] })
 child.stdout.on("data", data => { stdout += data }); child.stderr.on("data", data => { stderr += data })
-const timer = setTimeout(() => { try { process.kill(-child.pid, "SIGKILL") } catch {} }, 90_000)
+const timer = setTimeout(() => { try { process.kill(-child.pid, "SIGKILL") } catch {} }, 120_000)
 const code = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", resolve) })
-clearTimeout(timer); server.close()
+clearTimeout(timer); server.close(); await sshd.stop()
 
 const logs = path.join(root, ".local", "smoke-host.log")
 await writeFile(logs, `${stdout}\n----- stderr -----\n${stderr}`, { mode: 0o600 })
@@ -91,13 +105,22 @@ try {
   assert.equal(code, 0, `opencode exited ${code}; see ${logs}`)
   assert.equal(calls.length, 0, "every scripted tool call was made")
   assert.ok(stdout.includes("OC_MACHINE_SMOKE_COMPLETE"), "run completed")
-  const machineGet = toolResults.find(text => text.includes('"permissions"'))
-  assert.ok(machineGet, "machine_get result reached the model")
-  assert.match(machineGet, /"env:OCM_SMOKE_SECRET": "set"/)
-  assert.ok(!toolResults.some(text => text.includes(SECRET)), "the secret never appears in a plugin tool result")
-  const shellEnv = (await readFile(path.join(workspace, "shell-env.txt"), "utf8")).split("\n")
-  assert.equal(shellEnv[0], `plain-value|${path.join(dataDir, "ssh_config")}|${SECRET}`, "new shells get the local machine's env vars")
-  assert.ok(shellEnv.includes("hostname 127.0.0.1") && shellEnv.includes("user smoke") && shellEnv.includes("forwardx11 yes"), "ssh resolves the alias through OCM_SSH_CONFIG")
+  assert.doesNotMatch(stderr, /\[oc-machine\] (disabled|could not|tool reload failed)/, "no plugin warnings")
+
+  assert.match(descriptions[0], /No machines or env vars are configured yet/)
+  assert.match(descriptions.at(-1), /box \(linux, ssh\) Smoke sshd/, "inventory refreshed in the live tool list")
+  assert.match(descriptions.at(-1), /SMOKE_SECRET \[secret\]: Smoke test API token/)
+
+  const all = toolResults.join("\n")
+  assert.ok(!all.includes(SECRET), "the secret never reaches the model")
+  const used = toolResults.find(text => text.includes("local=plain-value"))
+  assert.ok(used, "shell result reached the model")
+  assert.match(used, /secret=\[REDACTED:env:SMOKE_SECRET\]/, "secret was supplied and masked in output")
+  assert.match(used, /denied=\[\]/)
+  assert.match(used, /\$SMOKE_DENIED: use denied by the Machines permission table/)
+  assert.match(used, new RegExp(`remote-plain-value-${sshd.user}`), "ssh through the per-command config, with the key passphrase from the vault")
+  assert.equal((await readFile(path.join(workspace, "plain-env.txt"), "utf8")).trim(), "", "a command that references nothing gets nothing")
+  assert.ok(toolResults.some(text => text.includes('"ok": true') && text.includes(`"user": "${sshd.user}"`)), "machine_test connected")
   console.log(`oc-machine host smoke passed (OpenCode ${OPENCODE_VERSION}, ${process.platform}-${process.arch}, ${modelRequests} model requests).`)
   await rm(base, { recursive: true, force: true })
 } catch (error) {

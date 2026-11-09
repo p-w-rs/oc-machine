@@ -1,66 +1,93 @@
 # oc-machine
 
-Machines for OpenCode: SSH settings, sudo password, env vars and a permission
-table per machine. The agent sets machines up; you enter secrets and own the
-permissions. macOS and Linux. Requires OpenCode 2.2.6+ and Pixi.
+Machines and env vars for OpenCode agents. The plugin tells the agent what
+exists (machines, env vars with descriptions); the agent uses them **from its
+own shell**, and the plugin supplies the values to that one command after a
+permission check. macOS and Linux. Requires OpenCode 2.2.6+ and Pixi.
 
-**Status: milestone 2.** Machine config, SSH config generation, shell env vars
-and the permission engine work. `machine_exec` / sudo / key generation
-(milestone 3) and the Review-pane GUI (milestone 4) are not built yet. Until
-the GUI lands, enter secrets with `pixi run secret-set`; permissions use the
-defaults below (the table editor arrives with the GUI).
+**Status:** machine and env var setup, ssh (agent, key + passphrase, password,
+generated keys, jump hosts, forwarding), sudo, permissions and masking work.
+The Review-pane GUI, export/import and installer polish are next. Until then,
+enter secrets with `pixi run secret-set` and permissions use the defaults below.
 
-## What it adds, and what it never changes
+## How the agent uses it
 
-Adds: six `machine_*` tools, a generated `ssh_config`, and env vars in new
-agent shells. Never: denies or prompts for native tools, rewrites native tool
-output, edits `~/.ssh/config`, or overwrites an env var your shell already has
-(unless that variable is marked `override`). If the plugin hits an error, it
-disables itself or skips the addition; OpenCode keeps working as usual.
+The `machine_list` tool description carries a live inventory (names and
+descriptions, never values), e.g.
 
-## Agent tools
+```
+Machines:
+  gpu-2 (linux, ssh) A100 training box
+  here (macos, this computer)
+Env vars (usable on any machine):
+  HF_TOKEN [secret]: Hugging Face read token for model downloads
+```
+
+The agent then just writes normal shell commands:
+
+| In the command | Supplied for that command only |
+|---|---|
+| `$HF_TOKEN` (any defined env var) | its value |
+| `ssh -F "$OCM_SSH_CONFIG" gpu-2 …` (also scp, rsync `-e`, sftp) | a per-command ssh config with keys, jump hosts and allowed forwarding, plus answers for password / passphrase prompts |
+| `ssh -F "$OCM_SSH_CONFIG" gpu-2 "HF_TOKEN=$HF_TOKEN python x.py"` | a variable used on a remote machine |
+| `printf '%s\n' "$OCM_SUDO_PASSWORD" \| ssh -F "$OCM_SSH_CONFIG" gpu-2 "sudo -S -p '' cmd"` | remote sudo password |
+| `sudo -A cmd` | local sudo password (`SUDO_ASKPASS`) |
+
+A command that references none of these runs exactly as in plain OpenCode.
+A value that is denied or declined is simply not supplied; the command still
+runs and its result gets a one-line `[oc-machine]` note saying why. Secret
+values are masked in the output of commands they were supplied to.
+
+## What it never changes
+
+It never blocks or prompts for native tools on its own, never edits
+`~/.ssh/config` or `authorized_keys` on this computer, never adds anything to
+commands that do not reference it, and never touches native tool output
+except for commands it supplied values to (masking + notes) and a usage tip
+when a plain `ssh <configured-machine>` fails. If anything goes wrong inside
+the plugin, it skips its own part and OpenCode carries on.
+
+## Setup tools (the agent calls these)
 
 | Tool | |
 |---|---|
-| `machine_list`, `machine_get` | Config, which secrets are set (never values), and what this agent may do |
-| `machine_upsert` | Create/update/rename a machine; `local: true` marks the host OpenCode runs on. SSH settings are checked with `ssh -G` before saving |
-| `machine_remove` | Delete a machine with its secrets and permissions (asks by default) |
-| `machine_request_secret` | Ask you for `sudo`, `ssh-password`, `key-passphrase` or `env:<NAME>` |
+| `machine_list`, `machine_get` | Inventory, which secrets are set (never values), what this agent may do |
+| `machine_upsert` / `machine_remove` | Machines; `local: true` marks this computer. SSH settings are checked with `ssh -G` |
+| `machine_env_set` / `machine_env_remove` | Global env vars, each with a description |
+| `machine_request_secret` | Ask you for a secret env value or a machine's `sudo` / `ssh-password` / `key-passphrase` |
+| `machine_ssh_keygen` | Dedicated ed25519 key per machine, installed with the current login |
+| `machine_test` | Log in and report OS / user / hostname |
 | `machine_ssh_config` | Show the generated config |
-
-The agent connects with `ssh -F "$OCM_SSH_CONFIG" <machine-id>`.
 
 ## Entering secrets
 
 ```sh
-pixi run secret-set <machine> <slot>     # prompts with echo off; or pipe the value on stdin
-pixi run secret-unset <machine> <slot>
-pixi run secret-list                     # pending requests and stored slots, never values
+pixi run secret-set HF_TOKEN             # a secret env var; prompts with echo off (or pipe on stdin)
+pixi run secret-set gpu-2 sudo           # sudo | ssh-password | key-passphrase
+pixi run secret-unset HF_TOKEN
+pixi run secret-list                     # pending requests and stored secrets, never values
 ```
 
 Set `OC_MACHINE_DATA_DIR` if you configured a custom `dataDirectory`.
 
 ## Permissions
 
-Each machine has a table: columns `ssh`, `sudo`, `x11`, `agent-forward`,
-`manage`, `remove` and one `env.<NAME>` per variable; rows per agent, an
-any-agent (`*`) row, and per-session overrides. Cells are allow / ask / deny;
-unset cells default to **allow**, except `sudo` and `remove`, which **ask**.
-Order: session override, then the agent's row, then `*`, then the default.
+Two tables, each with a row per agent, an any-agent (`*`) row and per-session
+overrides (covering subagents). Cells are allow / ask / deny; **ask** shows
+OpenCode's native prompt; a native deny rule in your config still wins.
 
-- Plugin tools follow the full table. **Ask** uses OpenCode's native prompt; a
-  native deny rule in your config still wins.
-- The agent's own shell follows the `*` row only (OpenCode's shell hook does
-  not say which agent opened the shell), and only **allow** counts there:
-  denied or ask env vars are not added, and hosts without ssh allowed are left
-  out of the generated `ssh_config`, as are X11/agent forwarding when not allowed.
+- **Machines:** `ssh`, `sudo`, `x11`, `agent-forward`, `manage`, `remove`
+- **Env vars:** `use`, `manage`, `remove` per variable
+
+Unset cells allow, except `sudo` and `remove`, which ask. Order: session
+override, then the agent's row, then `*`, then the default.
 
 ## Options
 
 ```jsonc
 { "plugins": [{ "package": "/path/to/oc-machine", "options": {
   "dataDirectory": "/abs/path",   // default $XDG_DATA_HOME/oc-machine (~/.local/share/oc-machine)
-  "redactAllTools": false,        // also mask secrets in native tool output (changes native results)
+  "redactAllTools": false,        // also mask secrets in every native tool's output
   "guardDataDirectory": false     // deny native file tools inside the data directory
 } }] }
 ```
@@ -68,17 +95,20 @@ Order: session override, then the agent's row, then `*`, then the default.
 ## Development
 
 ```sh
-pixi run --locked test         # typecheck + unit/integration tests (uses the pinned OpenSSH)
-pixi run --locked build        # GUI bundle
-pixi run --locked smoke-host   # real OpenCode 2.2.6 CLI, isolated home, scripted model
+pixi run --locked test         # typecheck + tests (pinned OpenSSH; a throwaway sshd on 127.0.0.1)
+pixi run --locked smoke-host   # real OpenCode 2.2.6 CLI, isolated home, scripted model, throwaway sshd
 pixi run --locked doctor
 pixi run --locked install-dev  # point your OpenCode config at this checkout
 ```
 
+Tests never touch your real `~/.ssh`: the test sshd gives sessions a temporary
+`HOME`, test machines use their own known_hosts, and the suite fails if
+`~/.ssh/authorized_keys` or `known_hosts` change.
+
 ## Security notes
 
-Usability comes first; this is a large step up from agents reading raw env
-vars, not a hard boundary. Secret env vars are injected into the agent's shell
-when allowed, so the agent can see them there. The vault key is a 0600 file
-next to the vault, readable by anything running as you. Sudo, SSH passwords and
-key passphrases will only ever be used inside plugin tools (milestone 3).
+Usability first; this is a large step up from agents reading raw env vars, not
+a hard boundary. A value supplied to a command is visible to that command, so
+the agent could print it in an encoding the masking misses. Per-command files
+(config, keys, askpass answers) live in a private run directory removed shortly
+after the command. The vault key is a 0600 file next to the vault.

@@ -12,7 +12,7 @@ export interface SshPolicy {
 }
 
 export interface RenderOptions {
-  /** Directory holding materialized generated keys (`<keysDir>/<id>`). */
+  /** Directory holding materialized generated keys (`<keysDir>/<id>`) for this command. */
   readonly keysDir: string
   readonly policy: (machineId: string) => SshPolicy
 }
@@ -66,6 +66,8 @@ export function renderHost(machine: Machine, all: ReadonlyMap<string, Machine>, 
   for (const forward of ssh.remoteForwards ?? []) lines.push(`  RemoteForward ${forward.replace(/:(?=[^:]+:\d+$)/, " ")}`)
   set("ServerAliveInterval", ssh.serverAliveInterval)
   for (const [name, value] of Object.entries(ssh.options ?? {})) set(name, value)
+  // Agents cannot answer ssh's interactive yes/no for a new host; trust on first use, still reject changed keys.
+  if (!Object.keys(ssh.options ?? {}).some(name => name.toLowerCase() === "stricthostkeychecking")) set("StrictHostKeyChecking", "accept-new")
   return lines.join("\n")
 }
 
@@ -88,15 +90,29 @@ export function renderConfig(machines: readonly Machine[], options: RenderOption
   ].join("\n")
 }
 
+/** Machines a set of targets needs: the targets plus every jump host that is itself a configured machine. */
+export function withJumpHosts(targets: Iterable<string>, all: ReadonlyMap<string, Machine>): string[] {
+  const result = new Set<string>()
+  const visit = (id: string) => {
+    if (result.has(id) || !all.has(id)) return
+    result.add(id)
+    for (const hop of all.get(id)!.ssh?.proxyJump?.split(",") ?? []) visit(hop)
+  }
+  for (const id of targets) visit(id)
+  return [...result]
+}
+
 export interface SshResult { readonly code: number | null; readonly stdout: string; readonly stderr: string }
 
-export function runSsh(args: readonly string[], options: { ssh?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {}): Promise<SshResult> {
+export function runSsh(args: readonly string[], options: { ssh?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv; input?: string } = {}): Promise<SshResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(options.ssh ?? "ssh", args, { stdio: ["ignore", "pipe", "pipe"], env: options.env ?? process.env })
+    const child = spawn(options.ssh ?? "ssh", args, { stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], env: options.env ?? process.env, detached: true })
+    if (options.input !== undefined) child.stdin!.end(options.input)
     let stdout = "", stderr = ""
-    child.stdout.on("data", chunk => { if (stdout.length < 1_000_000) stdout += chunk })
-    child.stderr.on("data", chunk => { if (stderr.length < 1_000_000) stderr += chunk })
-    const timer = setTimeout(() => child.kill("SIGKILL"), options.timeoutMs ?? 10_000)
+    child.stdout!.on("data", chunk => { if (stdout.length < 1_000_000) stdout += chunk })
+    child.stderr!.on("data", chunk => { if (stderr.length < 1_000_000) stderr += chunk })
+    // ssh may hand off to an askpass helper or ProxyJump child; kill the whole group on timeout.
+    const timer = setTimeout(() => { try { process.kill(-child.pid!, "SIGKILL") } catch { child.kill("SIGKILL") } }, options.timeoutMs ?? 10_000)
     child.on("error", error => { clearTimeout(timer); reject(error) })
     child.on("close", code => { clearTimeout(timer); resolve({ code, stdout, stderr }) })
   })

@@ -1,12 +1,11 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { capabilities, defaultEffect, isFillableSlot, mergeMachine, normalizeMachine, secretSlots } from "./model.js"
+import { defaultEffect, envEntity, isFillableSlot, machineSlots, mergeEnvVar, mergeMachine, normalizeEnvVar, normalizeMachine } from "./model.js"
 
-const base = { id: "web-1", os: "linux", ssh: { host: "web1.example.com", user: "deploy", auth: "agent" }, env: [] }
+const base = { id: "web-1", os: "linux", ssh: { host: "web1.example.com", user: "deploy", auth: "agent" } }
 
 test("normalizes a machine and fills defaults", () => {
-  const machine = normalizeMachine({ id: "box", env: [{ name: "REGION", value: "us-east-1" }] }, new Date(0))
-  assert.deepEqual(machine, { id: "box", os: "linux", env: [{ name: "REGION", secret: false, value: "us-east-1" }], updatedAt: "1970-01-01T00:00:00.000Z" })
+  assert.deepEqual(normalizeMachine({ id: "box" }, new Date(0)), { id: "box", os: "linux", updatedAt: "1970-01-01T00:00:00.000Z" })
 })
 
 test("accepts the full ssh feature set", () => {
@@ -19,12 +18,13 @@ test("accepts the full ssh feature set", () => {
     },
   })
   assert.deepEqual(machine.ssh?.localForwards, ["8080:localhost:80", "127.0.0.1:5432:db:5432"])
-  assert.equal(machine.ssh?.port, 2222)
+  assert.equal(machine.ssh?.forwardX11Trusted, false)
 })
 
-test("rejects bad input with actionable messages", () => {
+test("rejects bad machines with actionable messages", () => {
   const bad: [unknown, RegExp][] = [
-    [{ ...base, id: "has space" }, /Invalid machine name/],
+    [{ ...base, id: "has space" }, /machine id/],
+    [{ ...base, id: "a:b" }, /machine id/],
     [{ ...base, ssh: { host: "bad host;rm" } }, /not a hostname/],
     [{ ...base, ssh: { host: "h", user: "a b" } }, /valid user/],
     [{ ...base, ssh: { host: "h", auth: "key" } }, /identityFile is required/],
@@ -36,39 +36,53 @@ test("rejects bad input with actionable messages", () => {
     [{ ...base, ssh: { host: "h", options: { HostName: "x" } } }, /dedicated ssh field/],
     [{ ...base, ssh: { host: "h", options: { Compression: "yes\nHost *" } } }, /single-line/],
     [{ ...base, ssh: { host: "h", hostname: "x" } }, /Unknown ssh field/],
-    [{ ...base, env: [{ name: "TOKEN", secret: true, value: "abc" }] }, /do not pass its value/],
-    [{ ...base, env: [{ name: "1BAD", value: "x" }] }, /valid variable name/],
-    [{ ...base, env: [{ name: "A", value: "x" }, { name: "A", value: "y" }] }, /listed twice/],
-    [{ ...base, env: [{ name: "A" }] }, /needs a value/],
-    [{ ...base, hostname: "oops" }, /Unknown machine field/],
+    [{ ...base, publicKey: "ssh-rsa AAAA" }, /ssh-ed25519/],
+    [{ ...base, env: [] }, /Unknown machine field "env"/],
   ]
   for (const [input, message] of bad) assert.throws(() => normalizeMachine(input), message, JSON.stringify(input))
 })
 
-test("merge: fields merge, null clears, env replaces, auth switch drops stale fields", () => {
-  const existing = normalizeMachine({ ...base, label: "Web", ssh: { host: "h", auth: "key", identityFile: "~/k", forwardX11: true }, env: [{ name: "A", value: "1" }] })
-  const merged = normalizeMachine(mergeMachine(existing, { label: null, ssh: { auth: "agent", port: 22 }, env: [{ name: "B", secret: true }] }))
-  assert.equal(merged.label, undefined)
-  assert.deepEqual(merged.ssh, { host: "h", auth: "agent", port: 22, forwardX11: true })
-  assert.deepEqual(merged.env, [{ name: "B", secret: true }])
-  assert.equal(normalizeMachine(mergeMachine(existing, { ssh: null })).ssh, undefined)
+test("env vars need a description; secrets never take a value", () => {
+  assert.deepEqual(normalizeEnvVar({ name: "HF_TOKEN", description: "Hugging Face read token", secret: true }, new Date(0)),
+    { name: "HF_TOKEN", description: "Hugging Face read token", secret: true, updatedAt: "1970-01-01T00:00:00.000Z" })
+  const bad: [unknown, RegExp][] = [
+    [{ name: "HF_TOKEN", secret: true }, /needs a description/],
+    [{ name: "HF_TOKEN", description: "x", secret: true, value: "abc" }, /do not pass its value/],
+    [{ name: "1BAD", description: "x", value: "v" }, /valid variable name/],
+    [{ name: "OCM_SSH_CONFIG", description: "x", value: "v" }, /reserved/],
+    [{ name: "SUDO_ASKPASS", description: "x", value: "v" }, /reserved/],
+    [{ name: "A", description: "x" }, /needs a value/],
+    [{ name: "A", description: "line\nbreak", value: "v" }, /single-line/],
+  ]
+  for (const [input, message] of bad) assert.throws(() => normalizeEnvVar(input), message, JSON.stringify(input))
 })
 
-test("secret slots and capabilities follow the configuration", () => {
-  const machine = normalizeMachine({ ...base, ssh: { host: "h", auth: "password" }, env: [{ name: "TOKEN", secret: true }, { name: "REGION", value: "x" }] })
-  assert.deepEqual(secretSlots(machine), ["sudo", "ssh-password", "env:TOKEN"])
-  assert.deepEqual(capabilities(machine), ["ssh", "sudo", "x11", "agent-forward", "manage", "remove", "env.TOKEN", "env.REGION"])
-  assert.equal(isFillableSlot(machine, "env:TOKEN"), true)
-  assert.equal(isFillableSlot(machine, "env:REGION"), false)
-  assert.equal(isFillableSlot(machine, "key-passphrase"), false)
+test("merging: fields merge, null clears, auth switch drops stale fields, secret drops value", () => {
+  const existing = normalizeMachine({ ...base, label: "Web", ssh: { host: "h", auth: "key", identityFile: "~/k", forwardX11: true } })
+  const merged = normalizeMachine(mergeMachine(existing, { label: null, ssh: { auth: "agent", port: 22 } }))
+  assert.equal(merged.label, undefined)
+  assert.deepEqual(merged.ssh, { host: "h", auth: "agent", port: 22, forwardX11: true })
+  assert.equal(normalizeMachine(mergeMachine(existing, { ssh: null })).ssh, undefined)
+
+  const plain = normalizeEnvVar({ name: "REGION", description: "AWS region", value: "us-east-1" })
+  assert.equal(normalizeEnvVar(mergeEnvVar(plain, { description: "Default AWS region" })).value, "us-east-1")
+  const secret = normalizeEnvVar(mergeEnvVar(plain, { secret: true }))
+  assert.equal(secret.value, undefined)
+})
+
+test("secret slots follow the ssh auth", () => {
+  const password = normalizeMachine({ ...base, ssh: { host: "h", auth: "password" } })
+  assert.deepEqual(machineSlots(password), ["sudo", "ssh-password"])
+  assert.equal(isFillableSlot(password, "ssh-password"), true)
+  assert.equal(isFillableSlot(password, "key-passphrase"), false)
   const generated = normalizeMachine({ ...base, ssh: { host: "h", auth: "generated" } })
+  assert.deepEqual(machineSlots(generated), ["sudo", "ssh-key"])
   assert.equal(isFillableSlot(generated, "ssh-key"), false, "generated keys are never typed in")
+  assert.equal(envEntity("HF_TOKEN"), "env:HF_TOKEN")
 })
 
 test("defaults favor working over prompting", () => {
-  assert.equal(defaultEffect("ssh"), "allow")
-  assert.equal(defaultEffect("env.TOKEN"), "allow")
-  assert.equal(defaultEffect("manage"), "allow")
+  for (const capability of ["ssh", "use", "manage", "x11", "agent-forward"]) assert.equal(defaultEffect(capability), "allow")
   assert.equal(defaultEffect("sudo"), "ask")
   assert.equal(defaultEffect("remove"), "ask")
 })

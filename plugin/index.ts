@@ -1,6 +1,7 @@
 import { Plugin } from "@opencode/plugin"
 import { guardDirectories, installRedaction, PermissionBridge, pluginDataDir, SECURE_KIT_VERSION, sessionRoots, type PermissionHost } from "oc-secure-kit"
 import { defaultEffect } from "./model.js"
+import { NativeShell } from "./nativeshell.js"
 import { MachineService, PLUGIN_ID } from "./service.js"
 import { createTools, TOOL_NAMES } from "./tools.js"
 
@@ -9,7 +10,7 @@ export { PLUGIN_ID, SECURE_KIT_VERSION }
 export interface MachineOptions {
   /** Absolute path; default `$XDG_DATA_HOME/oc-machine`. */
   readonly dataDirectory?: string
-  /** Also mask secrets in native tool output (read, shell, ...). Off by default: it changes native results. */
+  /** Also mask secrets in every native tool's output (read, grep, ...). Off by default: it changes native results. */
   readonly redactAllTools?: boolean
   /** Deny native file tools inside the data directory. Off by default: it changes native permissions. */
   readonly guardDataDirectory?: boolean
@@ -36,8 +37,8 @@ export function createPlugin(): Plugin.Plugin {
   return Plugin.define({
     id: PLUGIN_ID,
     async setup(ctx) {
-      const registrations: { dispose(): Promise<void> }[] = []
-      const cleanup = async () => { await Promise.allSettled(registrations.splice(0).reverse().map(item => item.dispose())) }
+      const registrations: { dispose(): Promise<void> | void }[] = []
+      const cleanup = async () => { await Promise.allSettled(registrations.splice(0).reverse().map(async item => item.dispose())) }
       try {
         const options = parseOptions(ctx.options)
         const service = await MachineService.open(pluginDataDir(PLUGIN_ID, options.dataDirectory))
@@ -47,12 +48,14 @@ export function createPlugin(): Plugin.Plugin {
           root: sessionRoots(async sessionID => (await ctx.session.get({ sessionID: sessionID as never })).parentID ?? undefined),
         })
         registrations.push(await bridge.install(permission))
+        service.attach(bridge)
 
-        const tools = createTools(service, bridge)
+        // Tool descriptions carry the inventory; they are rebuilt whenever the configuration changes.
+        const tools = createTools(service)
         registrations.push(await ctx.tool.transform(editor => {
           for (const tool of tools) {
             editor.add({
-              name: tool.name, description: tool.description, input: tool.input as never, options: { codemode: false },
+              name: tool.name, description: tool.description(), input: tool.input as never, options: { codemode: false },
               execute: async (input, context) => {
                 try { return await tool.execute(input, context) }
                 finally { await service.syncRedactor().catch(error => warn("redactor refresh failed", error)) }
@@ -60,23 +63,27 @@ export function createPlugin(): Plugin.Plugin {
             })
           }
         }))
-        if (options.redactAllTools) {
-          // Registered before the redaction hook, so native results are masked with current secrets.
-          registrations.push(await ctx.tool.hook("execute.after", async () => {
-            await service.syncRedactor().catch(error => warn("redactor refresh failed", error))
-          }))
-        }
+        let reloading: Promise<void> | undefined
+        const unsubscribe = service.store.onChange(() => {
+          reloading ??= Promise.resolve().then(() => ctx.tool.reload()).catch(error => warn("tool reload failed", error)).finally(() => { reloading = undefined })
+        })
+        registrations.push({ dispose: unsubscribe })
+
+        // The plugin's own tool output is always masked; native output only when it received secrets (below).
         registrations.push(await installRedaction(ctx.tool as never, service.redactor,
           options.redactAllTools ? "all" : new Set<string>(TOOL_NAMES), error => warn("redaction skipped", error)))
 
-        // Additive only: never blocks or fails a shell. On any error the shell starts exactly as it would without us.
-        registrations.push(await ctx.shell.hook("create.before", async event => {
-          try { Object.assign(event.env, await service.shellAdditions(event.env)) }
-          catch (error) { warn("shell env not added", error) }
-        }))
+        // Values for native shell commands that reference them. Commands that reference nothing are untouched.
+        const shell = new NativeShell(service, warn)
+        registrations.push({ dispose: () => shell.dispose() })
+        registrations.push(await ctx.tool.hook("execute.before", event => shell.before(event)))
+        registrations.push(await ctx.shell.hook("create.before", event => shell.create(event)))
+        registrations.push(await ctx.tool.hook("execute.after", event => shell.after(event as never)))
+        if (options.redactAllTools) {
+          registrations.push(await ctx.tool.hook("execute.after", async () => { await service.syncRedactor().catch(() => {}) }))
+        }
 
         if (options.guardDataDirectory) registrations.push(await guardDirectories(permission, PLUGIN_ID, [service.dir]))
-        await service.writeSshConfig().catch(error => warn("could not write ssh_config", error))
       } catch (error) {
         // The plugin disables itself; OpenCode and its native tools keep working.
         warn("disabled", error)

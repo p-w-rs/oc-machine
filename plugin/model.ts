@@ -5,13 +5,15 @@ export const MACHINES_FORMAT = "oc-machines/1"
 export type Os = "linux" | "macos"
 export type SshAuth = "agent" | "key" | "password" | "generated"
 
+/** A global env var, usable in shell commands on this computer or any machine. */
 export interface EnvVar {
   readonly name: string
-  /** Secret values live in the vault as `env:<name>`; non-secret values live here. */
+  /** What it is for, shown to the agent. Names alone are often cryptic. */
+  readonly description: string
+  /** Secret values live in the vault; non-secret values live here. */
   readonly secret: boolean
   readonly value?: string
-  /** Replace a variable the shell already has. Off by default, so existing environments behave as before. */
-  readonly override?: boolean
+  readonly updatedAt: string
 }
 
 export interface SshConfig {
@@ -41,50 +43,58 @@ export interface Machine {
   readonly label?: string
   readonly os: Os
   readonly ssh?: SshConfig
-  readonly env: readonly EnvVar[]
+  /** Public half of a generated key (auth `generated`); the private key is in the vault. */
+  readonly publicKey?: string
   readonly notes?: string
   readonly updatedAt: string
 }
 
-/** Secret slots a machine may have. `env:<NAME>` slots exist for each secret env var. */
-export type SecretSlot = "sudo" | "ssh-password" | "key-passphrase" | "ssh-key" | `env:${string}`
+/** Secret slots of a machine. */
+export type MachineSlot = "sudo" | "ssh-password" | "key-passphrase" | "ssh-key"
 
-export const BASE_CAPABILITIES = ["ssh", "sudo", "x11", "agent-forward", "manage", "remove"] as const
-export type Capability = (typeof BASE_CAPABILITIES)[number] | `env.${string}`
+/** Machine capabilities in the permission table. */
+export const MACHINE_CAPABILITIES = ["ssh", "sudo", "x11", "agent-forward", "manage", "remove"] as const
+/** Env var capabilities: each variable is its own entity `env:<NAME>`. */
+export const ENV_CAPABILITIES = ["use", "manage", "remove"] as const
+/** Vault secret name for an env var's value (entity `env:<NAME>`). */
+export const ENV_VALUE = "value"
+
+/** Policy and vault entity of an env var. Machine IDs cannot contain ':', so these never collide. */
+export const envEntity = (name: string) => `env:${name}`
 
 /** Usability first: unset cells allow, except sudo and removal, which ask. */
 export function defaultEffect(capability: string): "allow" | "ask" {
   return capability === "sudo" || capability === "remove" ? "ask" : "allow"
 }
 
-export function capabilities(machine: Machine): Capability[] {
-  return [...BASE_CAPABILITIES, ...machine.env.map(variable => `env.${variable.name}` as const)]
-}
-
-export function secretSlots(machine: Machine): SecretSlot[] {
-  const slots: SecretSlot[] = ["sudo"]
+export function machineSlots(machine: Machine): MachineSlot[] {
+  const slots: MachineSlot[] = ["sudo"]
   if (machine.ssh?.auth === "password") slots.push("ssh-password")
   if (machine.ssh?.auth === "key") slots.push("key-passphrase")
   if (machine.ssh?.auth === "generated") slots.push("ssh-key")
-  for (const variable of machine.env) if (variable.secret) slots.push(`env:${variable.name}`)
   return slots
 }
 
-/** Slots the user may fill. `ssh-key` is created by key generation, never typed in. */
-export function isFillableSlot(machine: Machine, slot: string): slot is SecretSlot {
-  return slot !== "ssh-key" && (secretSlots(machine) as string[]).includes(slot)
+/** Slots the user may type in. `ssh-key` is created by key generation; `key-passphrase` is optional. */
+export function isFillableSlot(machine: Machine, slot: string): slot is MachineSlot {
+  return slot !== "ssh-key" && (machineSlots(machine) as string[]).includes(slot)
 }
 
 const HOST = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?|\d{1,3}(?:\.\d{1,3}){3}|\[?[0-9A-Fa-f:]+(?:%[\w.]+)?\]?)$/
 const USER = /^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,63}$/
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
+export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
+const MACHINE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const JUMP = /^(?:[A-Za-z0-9_][A-Za-z0-9_.@-]{0,63}@)?[A-Za-z0-9.:\[\]%_-]+(?::\d{1,5})?$/
 const FORWARD = /^(?:(?:\[[^\]\s]+\]|[A-Za-z0-9.*_-]+):)?\d{1,5}[: ](?:\[[^\]\s]+\]|[A-Za-z0-9._-]+):\d{1,5}$|^\/[^\s]+ \/[^\s]+$/
 const OPTION_NAME = /^[A-Za-z][A-Za-z0-9]{1,63}$/
+const PUBLIC_KEY = /^ssh-ed25519 [A-Za-z0-9+/]+={0,2}( [^\r\n']{0,200})?$/
+/** Names reserved for the plugin's own shell references. */
+export const RESERVED_ENV = /^OCM_|^SSH_ASKPASS|^SUDO_ASKPASS$/
 /** Options that would change the structure of the generated file. */
 const STRUCTURAL = new Set(["host", "match", "include"])
 const MANAGED = new Set(["hostname", "user", "port", "proxyjump", "identityfile", "identityagent", "identitiesonly", "forwardx11",
-  "forwardx11trusted", "forwardagent", "localforward", "remoteforward", "serveraliveinterval", "preferredauthentications", "passwordauthentication"])
+  "forwardx11trusted", "forwardagent", "localforward", "remoteforward", "serveraliveinterval", "preferredauthentications", "passwordauthentication",
+  "pubkeyauthentication"])
 const CONTROL = /[\u0000-\u001f\u007f]/
 
 const fail = (message: string): never => { throw new Error(message) }
@@ -104,6 +114,17 @@ const port = (value: unknown, field: string): number | undefined => {
   return value as number
 }
 
+export function validMachineId(id: unknown): string {
+  if (typeof id !== "string" || !MACHINE_ID.test(id)) return fail(`machine id ${JSON.stringify(id)} must be 1-64 letters, digits, '.', '_' or '-' starting with a letter or digit (it is also the ssh Host alias)`)
+  return validName("machine", id)
+}
+
+export function validEnvName(name: unknown): string {
+  if (typeof name !== "string" || !ENV_NAME.test(name)) return fail(`env name ${JSON.stringify(name)} is not a valid variable name`)
+  if (RESERVED_ENV.test(name)) fail(`${name} is reserved by oc-machine`)
+  return name
+}
+
 export function normalizeSsh(input: unknown, machineId: string): SshConfig {
   if (!input || typeof input !== "object" || Array.isArray(input)) return fail("ssh must be an object")
   const raw = input as Record<string, unknown>
@@ -119,6 +140,7 @@ export function normalizeSsh(input: unknown, machineId: string): SshConfig {
   const identityFile = text(raw.identityFile, "ssh.identityFile", 1024)
   if (auth === "key" && !identityFile) fail("ssh.identityFile is required for key auth")
   if (identityFile !== undefined && auth !== "key") fail("ssh.identityFile only applies to key auth")
+  if (identityFile?.includes("'")) fail("ssh.identityFile cannot contain a single quote")
   const identityAgent = text(raw.identityAgent, "ssh.identityAgent", 1024)
   if (identityAgent !== undefined && auth !== "agent") fail("ssh.identityAgent only applies to agent auth")
   const proxyJump = text(raw.proxyJump, "ssh.proxyJump", 1024)
@@ -135,6 +157,8 @@ export function normalizeSsh(input: unknown, machineId: string): SshConfig {
       return forward.replace(/^(.*\d) (.*)$/, "$1:$2")
     })
   }
+  const localForwards = forwards(raw.localForwards, "ssh.localForwards")
+  const remoteForwards = forwards(raw.remoteForwards, "ssh.remoteForwards")
   const interval = raw.serverAliveInterval
   if (interval !== undefined && interval !== null && (!Number.isInteger(interval) || (interval as number) < 0 || (interval as number) > 3600)) {
     fail("ssh.serverAliveInterval must be 0-3600 seconds")
@@ -152,70 +176,65 @@ export function normalizeSsh(input: unknown, machineId: string): SshConfig {
     }
     if (Object.keys(options).length > 64) fail("ssh.options has too many entries")
   }
-  const ssh: SshConfig = {
+  const forwardX11 = flag(raw.forwardX11, "ssh.forwardX11")
+  const forwardX11Trusted = flag(raw.forwardX11Trusted, "ssh.forwardX11Trusted")
+  const forwardAgent = flag(raw.forwardAgent, "ssh.forwardAgent")
+  return {
     host, auth,
     ...(user !== undefined && { user }),
     ...(raw.port !== undefined && raw.port !== null && { port: port(raw.port, "ssh.port") }),
     ...(proxyJump !== undefined && { proxyJump }),
     ...(identityFile !== undefined && { identityFile }),
     ...(identityAgent !== undefined && { identityAgent }),
-    ...(flag(raw.forwardX11, "ssh.forwardX11") !== undefined && { forwardX11: raw.forwardX11 as boolean }),
-    ...(flag(raw.forwardX11Trusted, "ssh.forwardX11Trusted") !== undefined && { forwardX11Trusted: raw.forwardX11Trusted as boolean }),
-    ...(flag(raw.forwardAgent, "ssh.forwardAgent") !== undefined && { forwardAgent: raw.forwardAgent as boolean }),
-    ...(forwards(raw.localForwards, "ssh.localForwards")?.length && { localForwards: forwards(raw.localForwards, "ssh.localForwards") }),
-    ...(forwards(raw.remoteForwards, "ssh.remoteForwards")?.length && { remoteForwards: forwards(raw.remoteForwards, "ssh.remoteForwards") }),
+    ...(forwardX11 !== undefined && { forwardX11 }),
+    ...(forwardX11Trusted !== undefined && { forwardX11Trusted }),
+    ...(forwardAgent !== undefined && { forwardAgent }),
+    ...(localForwards?.length && { localForwards }),
+    ...(remoteForwards?.length && { remoteForwards }),
     ...(interval !== undefined && interval !== null && { serverAliveInterval: interval as number }),
     ...(options && Object.keys(options).length && { options }),
   }
-  return ssh
-}
-
-export function normalizeEnv(input: unknown): EnvVar[] {
-  if (input === undefined || input === null) return []
-  if (!Array.isArray(input) || input.length > 200) return fail("env must be a list of up to 200 variables")
-  const seen = new Set<string>()
-  return input.map((item: unknown) => {
-    if (!item || typeof item !== "object") return fail("env entries must be objects")
-    const raw = item as Record<string, unknown>
-    for (const key of Object.keys(raw)) if (!["name", "secret", "value", "override"].includes(key)) fail(`Unknown env field ${JSON.stringify(key)}`)
-    const name = typeof raw.name === "string" && ENV_NAME.test(raw.name) ? raw.name : fail(`env name ${JSON.stringify(raw.name)} is not a valid variable name`)
-    if (seen.has(name)) fail(`env ${name} is listed twice`)
-    seen.add(name)
-    const secret = flag(raw.secret, `env.${name}.secret`) ?? false
-    if (secret && raw.value !== undefined && raw.value !== null) {
-      fail(`env ${name} is secret: do not pass its value. Ask the user to enter it with machine_request_secret.`)
-    }
-    if (!secret && (raw.value === undefined || raw.value === null)) fail(`env ${name} needs a value (or set secret: true)`)
-    if (!secret && (typeof raw.value !== "string" || raw.value.length > 32 * 1024 || raw.value.includes("\0"))) fail(`env ${name} value must be a string up to 32 KiB`)
-    const override = flag(raw.override, `env.${name}.override`)
-    return { name, secret, ...(!secret && { value: raw.value as string }), ...(override && { override: true }) }
-  })
 }
 
 /** Validates a complete machine. Unknown fields are rejected so typos surface instead of being ignored. */
 export function normalizeMachine(input: unknown, now = new Date()): Machine {
   if (!input || typeof input !== "object" || Array.isArray(input)) return fail("machine must be an object")
   const raw = input as Record<string, unknown>
-  for (const key of Object.keys(raw)) if (!["id", "label", "os", "ssh", "env", "notes", "updatedAt"].includes(key)) fail(`Unknown machine field ${JSON.stringify(key)}`)
-  const id = validName("machine", raw.id as string)
-  if (id.length > 64 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) fail("machine id must be 1-64 letters, digits, '.', '_' or '-' (it is also the ssh Host alias)")
+  for (const key of Object.keys(raw)) if (!["id", "label", "os", "ssh", "publicKey", "notes", "updatedAt"].includes(key)) fail(`Unknown machine field ${JSON.stringify(key)}`)
+  const id = validMachineId(raw.id)
   const os = (raw.os ?? "linux") as Os
   if (os !== "linux" && os !== "macos") fail("os must be linux or macos")
   const label = text(raw.label, "label", 120)
   const notes = typeof raw.notes === "string" && raw.notes.length <= 4000 ? raw.notes : raw.notes === undefined || raw.notes === null ? undefined : fail("notes must be text up to 4000 characters")
+  const publicKey = text(raw.publicKey, "publicKey", 1000)
+  if (publicKey !== undefined && !PUBLIC_KEY.test(publicKey)) fail("publicKey must be an ssh-ed25519 public key")
   return {
     id, os,
     ...(label !== undefined && { label }),
     ...(raw.ssh !== undefined && raw.ssh !== null && { ssh: normalizeSsh(raw.ssh, id) }),
-    env: normalizeEnv(raw.env),
+    ...(publicKey !== undefined && { publicKey }),
     ...(notes && { notes }),
     updatedAt: now.toISOString(),
   }
 }
 
+export function normalizeEnvVar(input: unknown, now = new Date()): EnvVar {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return fail("env var must be an object")
+  const raw = input as Record<string, unknown>
+  for (const key of Object.keys(raw)) if (!["name", "description", "secret", "value", "updatedAt"].includes(key)) fail(`Unknown env field ${JSON.stringify(key)}`)
+  const name = validEnvName(raw.name)
+  const description = text(raw.description, "description", 300) ?? fail(`${name} needs a description of what it is for`)
+  const secret = flag(raw.secret, "secret") ?? false
+  if (secret && raw.value !== undefined && raw.value !== null) {
+    fail(`${name} is secret: do not pass its value. Ask the user to enter it with machine_request_secret.`)
+  }
+  if (!secret && (raw.value === undefined || raw.value === null)) fail(`${name} needs a value (or set secret: true)`)
+  if (!secret && (typeof raw.value !== "string" || raw.value.length > 32 * 1024 || raw.value.includes("\0"))) fail(`${name} value must be a string up to 32 KiB`)
+  return { name, description, secret, ...(!secret && { value: raw.value as string }), updatedAt: now.toISOString() }
+}
+
 /**
- * Merges an agent's partial update into an existing machine: top-level and `ssh` fields are merged, `null` clears a
- * field, and `env` (when given) replaces the list.
+ * Merges a partial update into an existing record: top-level and `ssh` fields are merged and `null` clears a field.
  */
 export function mergeMachine(existing: Machine | undefined, patch: Record<string, unknown>): Record<string, unknown> {
   const base: Record<string, unknown> = existing ? structuredClone(existing) as unknown as Record<string, unknown> : {}
@@ -236,5 +255,17 @@ export function mergeMachine(existing: Machine | undefined, patch: Record<string
     } else if (value === null) delete base[key]
     else base[key] = value
   }
+  return base
+}
+
+export function mergeEnvVar(existing: EnvVar | undefined, patch: Record<string, unknown>): Record<string, unknown> {
+  const base: Record<string, unknown> = existing ? { ...existing } : {}
+  delete base.updatedAt
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete base[key]
+    else base[key] = value
+  }
+  // Becoming secret drops the plain value; becoming plain needs a new value from the patch.
+  if (base.secret === true && !("value" in patch)) delete base.value
   return base
 }
