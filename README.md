@@ -29,8 +29,8 @@ Open it with `/machines`, the **+** menu of the side panel, or
   unless the file brings its own) or **replaces**. Session overrides and the
   "This computer" choice never travel; you pick the latter on import.
 
-The native prompt's **Allow always** does not change the table; set the cell
-to allow instead.
+**Allow always** on the native prompt sets those cells to allow in the asking
+agent's row (you will see it in the table); **Allow once** changes nothing.
 
 ## How the agent uses it
 

@@ -48,6 +48,8 @@ export function createPlugin(): Plugin.Plugin {
         const root = sessionRoots(async sessionID => (await ctx.session.get({ sessionID: sessionID as never })).parentID ?? undefined)
         const bridge = new PermissionBridge({ plugin: PLUGIN_ID, policy: service.policy, fallback: defaultEffect, root })
         registrations.push(await bridge.install(permission))
+        // "Allow always" on the native prompt writes allow into the table (the asking agent's row).
+        registrations.push(bridge.followReplies(ctx.event as never, error => warn("could not save Allow always", error)))
         service.attach(bridge)
 
         // Tool descriptions carry the inventory; they are rebuilt whenever the configuration changes.

@@ -62,6 +62,7 @@ async function host(options: Record<string, unknown> = {}, reply: "approve" | "r
       hook: async (name: string, callback: any) => registration(name === "execute.before" ? hooks.before : hooks.after, callback),
     },
     shell: { hook: async (_: string, callback: any) => registration(hooks.shell, callback) },
+    event: { subscribe: () => (async function* () {})() },
     agent: { list: async () => ({ data: [{ id: "build", name: "build", mode: "primary", hidden: false }, { id: "plan", name: "plan", mode: "primary", hidden: false }, { id: "title", name: "title", mode: "primary", hidden: true }] }) },
     rpc: { register: async (_: unknown, handlers: any) => { rpc = handlers; return { dispose: async () => { rpc = undefined } } } },
   }
