@@ -31,5 +31,15 @@ for (const tool of ["ssh", "ssh-keygen"]) {
   })
 }
 
+await check("installed snapshot", async () => {
+  const { releasesDir, verifyRelease } = await import("./install.mjs")
+  let state = {}
+  try { state = JSON.parse(await readFile(join(releasesDir(), "installation.json"), "utf8")) } catch {}
+  if (!state.current) return "not installed (pixi run install)"
+  if (state.dev) return `development link: ${state.current}`
+  const manifest = await verifyRelease(state.current)
+  return `${state.current} (${Object.keys(manifest.files).length} files intact)`
+})
+
 for (const [ok, label, detail] of checks) console.log(`${ok ? "ok  " : "FAIL"} ${label}${detail ? `: ${detail}` : ""}`)
 process.exit(checks.every(([ok]) => ok) ? 0 : 1)

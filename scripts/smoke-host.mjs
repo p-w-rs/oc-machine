@@ -28,6 +28,15 @@ const base = await mkdtemp(path.join(await realpath(os.tmpdir()), "oc-machine-sm
 const home = path.join(base, "home"), workspace = path.join(base, "workspace")
 await mkdir(workspace, { recursive: true }); await mkdir(path.join(home, "config", "opencode"), { recursive: true })
 const dataDir = path.join(home, "data", "oc-machine")
+// --snapshot: load a verified installed snapshot (built into this scratch home) instead of the checkout.
+let pluginPath = root
+if (process.argv.includes("--snapshot")) {
+  process.env.XDG_DATA_HOME = path.join(home, "data")
+  const { deploy, verifyRelease } = await import("./install.mjs")
+  pluginPath = await deploy()
+  await verifyRelease(pluginPath)
+  console.log(`Using snapshot ${pluginPath}`)
+}
 const SECRET = "smoke-secret-value-8c1f"
 const sshd = await startSshd()
 
@@ -79,7 +88,7 @@ await new Promise(resolve => server.listen(0, "127.0.0.1", resolve))
 
 await writeFile(path.join(home, "config", "opencode", "opencode.json"), JSON.stringify({
   $schema: "https://opencode.ai/config.json", model: "probe/probe",
-  plugins: [root],
+  plugins: [pluginPath],
   providers: { probe: {
     package: "@opencode/ai/providers/openai-compatible",
     settings: { baseURL: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "synthetic-not-a-secret" },
@@ -121,7 +130,8 @@ try {
   assert.match(used, new RegExp(`remote-plain-value-${sshd.user}`), "ssh through the per-command config, with the key passphrase from the vault")
   assert.equal((await readFile(path.join(workspace, "plain-env.txt"), "utf8")).trim(), "", "a command that references nothing gets nothing")
   assert.ok(toolResults.some(text => text.includes('"ok": true') && text.includes(`"user": "${sshd.user}"`)), "machine_test connected")
-  console.log(`oc-machine host smoke passed (OpenCode ${OPENCODE_VERSION}, ${process.platform}-${process.arch}, ${modelRequests} model requests).`)
+  if (pluginPath !== root) await (await import("./install.mjs")).verifyRelease(pluginPath) // running it changed nothing
+  console.log(`oc-machine host smoke passed${pluginPath !== root ? " from a snapshot" : ""} (OpenCode ${OPENCODE_VERSION}, ${process.platform}-${process.arch}, ${modelRequests} model requests).`)
   await rm(base, { recursive: true, force: true })
 } catch (error) {
   console.error(`Smoke failed. Scratch home kept at ${base}; logs at ${logs}`)

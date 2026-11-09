@@ -20,9 +20,12 @@ test = { cmd = "npm test", depends-on = ["check"] }
 doctor = { cmd = "node scripts/doctor.mjs", depends-on = ["build"] }
 install = { cmd = "node scripts/install.mjs", depends-on = ["build", "test"] }
 install-dev = { cmd = "node scripts/install.mjs --dev", depends-on = ["build"] }
-uninstall = "node scripts/install.mjs --uninstall"
+uninstall = { cmd = "node scripts/install.mjs --uninstall", depends-on = ["deps"] }
+rollback = { cmd = "node scripts/install.mjs --rollback", depends-on = ["deps"] }
+install-status = { cmd = "node scripts/install.mjs --status", depends-on = ["deps"] }
 secret-set = { cmd = "node scripts/secret.mjs set", depends-on = ["deps"] }
 secret-unset = { cmd = "node scripts/secret.mjs unset", depends-on = ["deps"] }
 secret-list = { cmd = "node scripts/secret.mjs list", depends-on = ["deps"] }
 smoke-host = { cmd = "node --import tsx scripts/smoke-host.mjs", depends-on = ["build"] }
+smoke-snapshot = { cmd = "node --import tsx scripts/smoke-host.mjs --snapshot", depends-on = ["build"] }
 desktop-dev = { cmd = "node scripts/desktop-dev.mjs", depends-on = ["build"] }

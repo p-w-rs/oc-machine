@@ -114,6 +114,21 @@ override, then the agent's row, then `*`, then the default.
 } }] }
 ```
 
+## Install
+
+```sh
+pixi run --locked install          # tests, then a verified snapshot under ~/.local/share/oc-machine/releases
+pixi run --locked install-status   # what is active, and whether its files are intact
+pixi run --locked rollback         # back to the previous snapshot (or dev link)
+pixi run --locked uninstall        # removes only this plugin's config entry; data and snapshots stay
+```
+
+Each install edits `~/.config/opencode/opencode.json(c)` with a backup next to
+it, keeps comments, other plugins and this plugin's `options`, and refuses to
+write if the result does not parse as expected. Snapshots record a SHA-256 of
+every file; a modified snapshot is never activated. The newest three (plus the
+current and previous) are kept.
+
 ## Development
 
 ```sh
