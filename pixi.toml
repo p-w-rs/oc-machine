@@ -21,3 +21,7 @@ doctor = { cmd = "node scripts/doctor.mjs", depends-on = ["build"] }
 install = { cmd = "node scripts/install.mjs", depends-on = ["build", "test"] }
 install-dev = { cmd = "node scripts/install.mjs --dev", depends-on = ["build"] }
 uninstall = "node scripts/install.mjs --uninstall"
+secret-set = { cmd = "node scripts/secret.mjs set", depends-on = ["deps"] }
+secret-unset = { cmd = "node scripts/secret.mjs unset", depends-on = ["deps"] }
+secret-list = { cmd = "node scripts/secret.mjs list", depends-on = ["deps"] }
+smoke-host = { cmd = "node scripts/smoke-host.mjs", depends-on = ["build"] }

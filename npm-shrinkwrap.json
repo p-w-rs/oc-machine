@@ -15,7 +15,7 @@
       "dependencies": {
         "@opencode/plugin": "2.2.6",
         "jsonc-parser": "3.3.1",
-        "oc-secure-kit": "file:vendor/oc-secure-kit-0.2.0.tgz"
+        "oc-secure-kit": "file:vendor/oc-secure-kit-0.3.0.tgz"
       },
       "devDependencies": {
         "@types/node": "24.10.0",
@@ -4021,9 +4021,9 @@
       }
     },
     "node_modules/oc-secure-kit": {
-      "version": "0.2.0",
-      "resolved": "file:vendor/oc-secure-kit-0.2.0.tgz",
-      "integrity": "sha512-geRxgCwAwESX7AIbzDU6tsUZRqEaojL08V6OJg9cwZPEYCeLQ9WV8a0E8Qurz+sjY/cKZK5cjuNaHp5kKjUfTA==",
+      "version": "0.3.0",
+      "resolved": "file:vendor/oc-secure-kit-0.3.0.tgz",
+      "integrity": "sha512-FAJVU1dIsJSn9wyJeN50/uIMMt7W9csbsxUWtbVJdWQ9jZXL2/3G3GRLlIGAqQ7JUEhjbQx9cTUFexk4Uj6xIA==",
       "license": "UNLICENSED",
       "engines": {
         "node": ">=24"
