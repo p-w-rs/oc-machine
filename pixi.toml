@@ -16,7 +16,7 @@ deps-update = "node scripts/deps.mjs --refresh --shrinkwrap"
 vendor-kit = "node scripts/vendor-kit.mjs"
 check = { cmd = "npm run check", depends-on = ["deps"] }
 build = { cmd = "npm run build", depends-on = ["deps"] }
-test = { cmd = "npm test", depends-on = ["check"] }
+test = { cmd = "npm test", depends-on = ["check", "build"] }
 doctor = { cmd = "node scripts/doctor.mjs", depends-on = ["build"] }
 install = { cmd = "node scripts/install.mjs", depends-on = ["build", "test"] }
 install-dev = { cmd = "node scripts/install.mjs --dev", depends-on = ["build"] }

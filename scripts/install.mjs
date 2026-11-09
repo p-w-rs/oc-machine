@@ -61,6 +61,8 @@ export async function verifyRelease(target) {
 
 /** Packs this checkout, installs its locked runtime dependencies, checks they load, and records every file's hash. */
 export async function deploy() {
+  try { await stat(join(root, "dist", "gui-experimental.cjs")) }
+  catch { throw new Error("The GUI bundle is not built (dist/gui-experimental.cjs). Run: pixi run --locked build") }
   const scratch = join(root, ".local", "pack")
   await mkdir(scratch, { recursive: true })
   for (const old of await readdir(scratch)) if (old.endsWith(".tgz")) await unlink(join(scratch, old))
