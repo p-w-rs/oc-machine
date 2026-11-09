@@ -7,8 +7,13 @@ permission check. macOS and Linux. Requires OpenCode 2.2.6+ and Pixi.
 
 **Status:** machine and env var setup, ssh (agent, key + passphrase, password,
 generated keys, jump hosts, forwarding), sudo, permissions, masking, the
-Review-pane / Settings GUI and encrypted export/import work. Installer polish
-and a Linux check are next.
+Review-pane / Settings GUI, encrypted export/import and the installer work.
+
+Tested on macOS (Apple Silicon, OpenCode 2.2.6 CLI and Desktop) and Ubuntu 24.04
+arm64 (OpenCode 2.2.6 CLI): full test suite, real-CLI smoke tests from the
+checkout and from an installed snapshot, install / rollback / uninstall, and a
+bundle exported on macOS imported on Linux. Linux x86-64 and the Linux Desktop
+app are not tested.
 
 ## The Machines view (you)
 
@@ -138,6 +143,14 @@ pixi run --locked doctor
 pixi run --locked install-dev  # point your OpenCode config at this checkout
 pixi run desktop-dev start --sample   # isolated OpenCode Desktop (own profile, port, data) for GUI checks
 pixi run desktop-dev stop
+```
+
+Linux checks use a UTM VM (`oc-machine-linux-test`, Ubuntu 24.04 arm64 cloud
+image, cloud-init over a local HTTP seed, SSH on 127.0.0.1:2232). Its key and
+ssh config live in `.local/linux-vm/`; copy the committed tree in with
+`git archive HEAD | ssh -F .local/linux-vm/ssh_config ocm-linux "tar -xf - -C /work"`.
+
+```sh
 ```
 
 Tests never touch your real `~/.ssh`: the test sshd gives sessions a temporary
