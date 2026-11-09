@@ -1,6 +1,8 @@
 import { Plugin } from "@opencode/plugin"
 import { guardDirectories, installRedaction, PermissionBridge, pluginDataDir, SECURE_KIT_VERSION, sessionRoots, type PermissionHost } from "oc-secure-kit"
+import { createAdmin } from "./admin.js"
 import { defaultEffect } from "./model.js"
+import { MachinesRpc } from "./rpc.js"
 import { NativeShell } from "./nativeshell.js"
 import { MachineService, PLUGIN_ID } from "./service.js"
 import { createTools, TOOL_NAMES } from "./tools.js"
@@ -43,10 +45,8 @@ export function createPlugin(): Plugin.Plugin {
         const options = parseOptions(ctx.options)
         const service = await MachineService.open(pluginDataDir(PLUGIN_ID, options.dataDirectory))
         const permission = ctx.permission as unknown as PermissionHost
-        const bridge = new PermissionBridge({
-          plugin: PLUGIN_ID, policy: service.policy, fallback: defaultEffect,
-          root: sessionRoots(async sessionID => (await ctx.session.get({ sessionID: sessionID as never })).parentID ?? undefined),
-        })
+        const root = sessionRoots(async sessionID => (await ctx.session.get({ sessionID: sessionID as never })).parentID ?? undefined)
+        const bridge = new PermissionBridge({ plugin: PLUGIN_ID, policy: service.policy, fallback: defaultEffect, root })
         registrations.push(await bridge.install(permission))
         service.attach(bridge)
 
@@ -82,6 +82,25 @@ export function createPlugin(): Plugin.Plugin {
         if (options.redactAllTools) {
           registrations.push(await ctx.tool.hook("execute.after", async () => { await service.syncRedactor().catch(() => {}) }))
         }
+
+        // GUI only: permissions, secret entry, export/import. Never exposed as agent tools.
+        const admin = createAdmin({
+          service, root,
+          agents: async () => ((await ctx.agent.list()).data ?? [])
+            .filter(agent => !agent.hidden)
+            .map(agent => ({ id: agent.id as string, name: agent.name, mode: agent.mode })),
+        })
+        registrations.push(await ctx.rpc.register(MachinesRpc, {
+          state: async input => admin.state(input as never),
+          setCells: async input => admin.setCells(input as never),
+          setSecret: async input => admin.setSecret(input as never),
+          unsetSecret: async input => admin.unsetSecret(input as never),
+          dismissRequest: async input => admin.dismissRequest(input as never),
+          setLocal: async input => admin.setLocal(input as never),
+          exportBundle: async input => admin.exportBundle(input as never),
+          previewImport: async input => admin.previewImport(input as never),
+          applyImport: async input => admin.applyImport(input as never),
+        }))
 
         if (options.guardDataDirectory) registrations.push(await guardDirectories(permission, PLUGIN_ID, [service.dir]))
       } catch (error) {

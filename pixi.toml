@@ -25,3 +25,4 @@ secret-set = { cmd = "node scripts/secret.mjs set", depends-on = ["deps"] }
 secret-unset = { cmd = "node scripts/secret.mjs unset", depends-on = ["deps"] }
 secret-list = { cmd = "node scripts/secret.mjs list", depends-on = ["deps"] }
 smoke-host = { cmd = "node --import tsx scripts/smoke-host.mjs", depends-on = ["build"] }
+desktop-dev = { cmd = "node scripts/desktop-dev.mjs", depends-on = ["build"] }

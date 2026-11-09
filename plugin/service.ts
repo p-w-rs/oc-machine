@@ -80,13 +80,16 @@ export class MachineService {
       [entity, (await this.bridge.effect({ sessionID: caller.sessionID, agent: caller.agent, capability, entity })).effect] as const))
     const denied = effects.filter(([, effect]) => effect === "deny").map(([entity]) => entity)
     if (denied.length) notes.push(`${denied.map(what).join(", ")}: ${capability} denied by the Machines permission table (the user can change it).`)
-    const rest = effects.filter(([, effect]) => effect !== "deny").map(([entity]) => entity)
-    if (!rest.length) return granted
-    try {
-      await this.bridge.check({ ...caller, capability, entities: rest, ...(metadata && { metadata }) })
-      for (const entity of rest) granted.add(entity)
-    } catch (error) {
-      notes.push(`${rest.map(what).join(", ")}: ${capability} not granted (${(error as Error).message.split("\n")[0]}).`)
+    // Allowed entities are checked without a prompt (native config denies still apply); only "ask" ones are shown to the user.
+    for (const wanted of ["allow", "ask"] as const) {
+      const group = effects.filter(([, effect]) => effect === wanted).map(([entity]) => entity)
+      if (!group.length) continue
+      try {
+        await this.bridge.check({ ...caller, capability, entities: group, ...(metadata && { metadata }) })
+        for (const entity of group) granted.add(entity)
+      } catch (error) {
+        notes.push(`${group.map(what).join(", ")}: ${capability} not granted (${(error as Error).message.split("\n")[0]}).`)
+      }
     }
     return granted
   }

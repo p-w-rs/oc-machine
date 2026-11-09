@@ -62,7 +62,10 @@ async function host(options: Record<string, unknown> = {}, reply: "approve" | "r
       hook: async (name: string, callback: any) => registration(name === "execute.before" ? hooks.before : hooks.after, callback),
     },
     shell: { hook: async (_: string, callback: any) => registration(hooks.shell, callback) },
+    agent: { list: async () => ({ data: [{ id: "build", name: "build", mode: "primary", hidden: false }, { id: "plan", name: "plan", mode: "primary", hidden: false }, { id: "title", name: "title", mode: "primary", hidden: true }] }) },
+    rpc: { register: async (_: unknown, handlers: any) => { rpc = handlers; return { dispose: async () => { rpc = undefined } } } },
   }
+  let rpc: any
   const cleanup = await createPlugin().setup(ctx as unknown as Plugin.Context) as () => Promise<void>
   let calls = 0
   const context = (agent: string, sessionID: string) => ({ sessionID, agent, messageID: "msg", id: `call-${++calls}`, signal: new AbortController().signal, progress: async () => {} })
@@ -108,7 +111,7 @@ async function host(options: Record<string, unknown> = {}, reply: "approve" | "r
 
   const vault = () => Vault.open({ dir, plugin: PLUGIN_ID })
   const policy = () => PolicyStore.open(dir)
-  return { dir, ctx, tools, prompts, call, shell, finish, vault, policy, cleanup, hooks }
+  return { dir, ctx, tools, prompts, call, shell, finish, vault, policy, cleanup, hooks, rpc: () => rpc }
 }
 
 /** A machine pointing at the test sshd, with its own known_hosts so the real one is never touched. */
@@ -130,6 +133,16 @@ test("registers tools and hooks; cleanup removes them all", async () => {
   await h.cleanup()
   assert.equal(h.tools.size, 0)
   assert.equal(Object.values(h.hooks).reduce((sum, list) => sum + list.length, 0), 0)
+})
+
+test("the GUI RPC is registered and uses the host's visible agents", async () => {
+  const h = await host()
+  await h.call("machine_upsert", { id: "box" })
+  const state = await h.rpc().state({ sessionID: "child" })
+  assert.deepEqual(state.agents.map((agent: { id: string }) => agent.id), ["build", "plan"])
+  assert.equal(state.session.root, "root")
+  await h.cleanup()
+  assert.equal(h.rpc(), undefined)
 })
 
 test("bad configuration disables the plugin without throwing into OpenCode", async () => {
@@ -185,9 +198,11 @@ test("the table governs env vars per agent and session, with native prompts for 
   await (await h.vault()).set("env:PROD_DB", "value", "prod-db-password")
   const policy = await h.policy()
 
+  await h.call("machine_env_set", { name: "REGION", description: "Default region", value: "us-east-1" })
   await policy.setCells([{ entity: "env:PROD_DB", row: { agent: "*" }, capability: "use", effect: "ask" }])
-  await h.shell('psql "$PROD_DB" 2>/dev/null; true')
-  assert.deepEqual(h.prompts.map(prompt => [prompt.action, prompt.resources]), [["oc-machine.use", ["env:PROD_DB"]]])
+  const both = await h.shell('psql "$PROD_DB" 2>/dev/null; echo "$REGION"')
+  assert.deepEqual(h.prompts.map(prompt => [prompt.action, prompt.resources]), [["oc-machine.use", ["env:PROD_DB"]]], "allowed vars are not shown in the prompt")
+  assert.match(both.text, /us-east-1/)
   assert.match(String(h.prompts[0]!.metadata?.command), /psql/)
 
   await policy.setCells([{ entity: "env:PROD_DB", row: { agent: "plan" }, capability: "use", effect: "deny" }])

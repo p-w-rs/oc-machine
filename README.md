@@ -6,9 +6,31 @@ own shell**, and the plugin supplies the values to that one command after a
 permission check. macOS and Linux. Requires OpenCode 2.2.6+ and Pixi.
 
 **Status:** machine and env var setup, ssh (agent, key + passphrase, password,
-generated keys, jump hosts, forwarding), sudo, permissions and masking work.
-The Review-pane GUI, export/import and installer polish are next. Until then,
-enter secrets with `pixi run secret-set` and permissions use the defaults below.
+generated keys, jump hosts, forwarding), sudo, permissions, masking, the
+Review-pane / Settings GUI and encrypted export/import work. Installer polish
+and a Linux check are next.
+
+## The Machines view (you)
+
+Open it with `/machines`, the **+** menu of the side panel, or
+**Settings → Machines**. It shows:
+
+- **Requested by the agent** — secrets the agent asked for; **Enter** opens a
+  password field. Values go straight to the encrypted vault on the server.
+- **Env vars** and **Machines** — what is configured, which secrets are set,
+  and a permission grid per item: rows **Any agent**, agents with their own
+  settings (**All agents** shows every agent), and **This session** (in the
+  Review pane: the current session and its subagents). Each cell is inherit /
+  allow / ask / deny; inherited values are shown faintly as `· allow`.
+- **This computer** switch per machine (used for `sudo -A`).
+- **Export** — one file with machines, env vars, agent permissions and secrets,
+  encrypted with a passphrase you choose. **Import** previews what would be
+  added, changed or kept, then **merges** (keeps local secrets and permissions
+  unless the file brings its own) or **replaces**. Session overrides and the
+  "This computer" choice never travel; you pick the latter on import.
+
+The native prompt's **Allow always** does not change the table; set the cell
+to allow instead.
 
 ## How the agent uses it
 
@@ -99,6 +121,8 @@ pixi run --locked test         # typecheck + tests (pinned OpenSSH; a throwaway 
 pixi run --locked smoke-host   # real OpenCode 2.2.6 CLI, isolated home, scripted model, throwaway sshd
 pixi run --locked doctor
 pixi run --locked install-dev  # point your OpenCode config at this checkout
+pixi run desktop-dev start --sample   # isolated OpenCode Desktop (own profile, port, data) for GUI checks
+pixi run desktop-dev stop
 ```
 
 Tests never touch your real `~/.ssh`: the test sshd gives sessions a temporary
