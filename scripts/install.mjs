@@ -87,7 +87,7 @@ export async function deploy() {
     run("npm", ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--cache", join(root, ".local", "npm-cache")], staging)
     // Runtime dependencies must resolve from the snapshot itself.
     const check = spawnSync(process.execPath, ["--input-type=module", "-e",
-      "const kit = await import('oc-secure-kit'); const p = await import('@opencode/plugin'); const j = await import('jsonc-parser'); if (!kit.SECURE_KIT_VERSION || !p.Plugin || !j.parse) process.exit(3); console.log(kit.SECURE_KIT_VERSION)"],
+      "const kit = await import('oc-secure-kit'); const j = await import('jsonc-parser'); if (!kit.SECURE_KIT_VERSION || !j.parse) process.exit(3); console.log(kit.SECURE_KIT_VERSION)"],
       { cwd: staging, encoding: "utf8" })
     if (check.status !== 0) throw new Error(`Snapshot dependencies do not load: ${check.stderr.trim().slice(-1000)}`)
     const files = {}

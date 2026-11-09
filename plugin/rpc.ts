@@ -1,14 +1,14 @@
-import { Rpc } from "@opencode/plugin/rpc"
-import { Schema } from "effect"
+import type { Rpc } from "@opencode/plugin/rpc"
 
-// Shared by the server plugin and the GUI. Input is validated by JSON Schema here and again by the server handlers.
-const output = Schema.toStandardSchemaV1(Schema.Unknown)
+// Shared by the server plugin and the GUI. Type-only import: the definition is plain data, so the server plugin needs
+// no OpenCode packages at runtime (the host provides them). Input is validated here and again by the handlers.
+const output = {} as const
 const object = (properties: Record<string, unknown>, required: string[] = []) =>
   ({ type: "object", properties, required, additionalProperties: false }) as const
 const sessionID = { type: "string", minLength: 1, maxLength: 200 }
 const effect = { enum: ["allow", "ask", "deny", null] }
 
-export const MachinesRpc = Rpc.define({
+export const MachinesRpc = {
   id: "oc-machine.admin",
   methods: {
     state: { input: object({ sessionID }), output },
@@ -41,7 +41,7 @@ export const MachinesRpc = Rpc.define({
     },
   },
   events: {},
-})
+} as const satisfies Rpc.PortableDefinition
 
 export type Effect = "allow" | "ask" | "deny"
 export type Status = "set" | "unset"

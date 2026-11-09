@@ -1,4 +1,4 @@
-import { Plugin } from "@opencode/plugin"
+import type { Plugin } from "@opencode/plugin"
 import { guardDirectories, installRedaction, PermissionBridge, pluginDataDir, SECURE_KIT_VERSION, sessionRoots, type PermissionHost } from "oc-secure-kit"
 import { createAdmin } from "./admin.js"
 import { defaultEffect } from "./model.js"
@@ -35,8 +35,9 @@ export function parseOptions(raw: unknown): MachineOptions {
 const warn = (message: string, error?: unknown) =>
   console.warn(`[${PLUGIN_ID}] ${message}${error ? `: ${error instanceof Error ? error.message : String(error)}` : ""}`)
 
+// A plain definition object (Plugin.define is the identity function), so no OpenCode package is loaded at runtime.
 export function createPlugin(): Plugin.Plugin {
-  return Plugin.define({
+  return ({
     id: PLUGIN_ID,
     async setup(ctx) {
       const registrations: { dispose(): Promise<void> | void }[] = []
@@ -112,7 +113,7 @@ export function createPlugin(): Plugin.Plugin {
       }
       return cleanup
     },
-  })
+  }) satisfies Plugin.Plugin
 }
 
 export default createPlugin()
