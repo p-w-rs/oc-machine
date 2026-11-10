@@ -1,7 +1,7 @@
 import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
-import { mkdtemp, readdir, rm, stat, utimes } from "node:fs/promises"
+import { mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
@@ -49,6 +49,7 @@ test("sudo askpass, keys and cleanup", async () => {
   const stale = await RunDir.create(dir)
   const fresh = await RunDir.create(dir)
   const old = new Date(Date.now() - 60 * 60_000)
+  await writeFile(stale.file(".owner"), "2147483646") // left behind by a process that has exited
   await utimes(stale.path, old, old)
   await RunDir.sweep(dir)
   assert.deepEqual(await readdir(dir), [fresh.path.split("/").pop()])
