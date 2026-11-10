@@ -9,7 +9,7 @@ const clip = (text: string, max: number) => text.length > max ? `${text.slice(0,
 export const USAGE = [
   `Use these from your normal shell tool; values are supplied to that one command after a permission check (it may ask the user).`,
   `- Env vars: reference them by name, e.g. $HF_TOKEN. On a remote machine: ssh -F "$${SSH_CONFIG_VAR}" gpu-2 "HF_TOKEN=$HF_TOKEN cmd".`,
-  `- SSH/scp/rsync: ssh -F "$${SSH_CONFIG_VAR}" <machine-id> ...  (rsync -e 'ssh -F "$${SSH_CONFIG_VAR}"' ...). Keys, jump hosts and passwords are handled.`,
+  `- SSH/scp/rsync: ssh -F "$${SSH_CONFIG_VAR}" <machine-id> ...  (rsync -e "ssh -F '$${SSH_CONFIG_VAR}'" ...). Keys, jump hosts and passwords are handled.`,
   `- sudo on this computer: sudo -A cmd. On a remote machine: printf '%s\\n' "$${SUDO_PASSWORD_VAR}" | ssh -F "$${SSH_CONFIG_VAR}" <id> "sudo -S -p '' cmd".`,
   `Never print or echo secret values.`,
 ].join("\n")
