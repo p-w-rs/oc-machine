@@ -14,7 +14,7 @@
       ],
       "dependencies": {
         "jsonc-parser": "3.3.1",
-        "oc-secure-kit": "file:vendor/oc-secure-kit-0.4.1.tgz"
+        "oc-secure-kit": "file:vendor/oc-secure-kit-0.5.1.tgz"
       },
       "devDependencies": {
         "@opencode/plugin": "2.2.6",
@@ -4250,9 +4250,9 @@
       }
     },
     "node_modules/oc-secure-kit": {
-      "version": "0.4.1",
-      "resolved": "file:vendor/oc-secure-kit-0.4.1.tgz",
-      "integrity": "sha512-LCSWpe4pLW2Molvnc/1TMlodoEZHvi6XNPoXSNiMt5D0yG08heJ7BaRqJ1VkqnC67w7h0Q38yutiT8sKv4dAfQ==",
+      "version": "0.5.1",
+      "resolved": "file:vendor/oc-secure-kit-0.5.1.tgz",
+      "integrity": "sha512-afK++slrTGhmmkguaAlPzjIznb9/vI8RHhUwpJ2Bu4CAFvbBkhEs7UW18ym2oE1/4bgIGRnE44IfBjLpu8kI+Q==",
       "license": "UNLICENSED",
       "engines": {
         "node": ">=24"

@@ -5,7 +5,7 @@ import { mkdtemp, readdir, rm, stat, utimes } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { RunDir } from "./rundir.js"
+import { RunDir, writeKey, writeSshAskpass, writeSudoAskpass } from "./rundir.js"
 
 const exec = promisify(execFile)
 const dirs: string[] = []
@@ -17,7 +17,7 @@ const ask = async (script: string, prompt: string) => {
 
 test("ssh askpass answers the right password or passphrase for each prompt", async () => {
   const run = await RunDir.create(await base())
-  const script = await run.writeSshAskpass([
+  const script = await writeSshAskpass(run, [
     { kind: "password", match: "10.0.0.2", value: "pw-for-gpu" },
     { kind: "password", match: "jump.example.com", value: "pw-for-jump" },
     { kind: "passphrase", match: "~/.ssh/id_work", value: "key-passphrase" },
@@ -33,15 +33,15 @@ test("ssh askpass answers the right password or passphrase for each prompt", asy
 
 test("a single password answers any password prompt", async () => {
   const run = await RunDir.create(await base())
-  const script = await run.writeSshAskpass([{ kind: "password", match: "host.example", value: "only-one" }])
+  const script = await writeSshAskpass(run, [{ kind: "password", match: "host.example", value: "only-one" }])
   assert.equal(await ask(script, "Password: "), "only-one")
 })
 
 test("sudo askpass, keys and cleanup", async () => {
   const dir = await base()
   const run = await RunDir.create(dir)
-  assert.equal(await ask(await run.writeSudoAskpass("sudo-pw"), "[sudo] password for me: "), "sudo-pw")
-  const key = await run.writeKey("gpu", "-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----")
+  assert.equal(await ask(await writeSudoAskpass(run, "sudo-pw"), "[sudo] password for me: "), "sudo-pw")
+  const key = await writeKey(run, "gpu", "-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----")
   assert.equal((await stat(key)).mode & 0o777, 0o600)
   await run.remove()
   assert.deepEqual(await readdir(dir), [])

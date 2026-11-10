@@ -1,8 +1,8 @@
 import { join } from "node:path"
-import { PolicyStore, Redactor, SecretRequests, Vault, type PermissionBridge } from "oc-secure-kit"
+import { PolicyStore, Redactor, SecretRequests, Vault, type PermissionBridge, type Supply } from "oc-secure-kit"
 import { defaultEffect, ENV_VALUE, envEntity, machineSlots, type EnvVar, type Machine } from "./model.js"
 import { analyzeCommand, isEmpty, SSH_CONFIG_VAR, SUDO_PASSWORD_VAR, type References } from "./references.js"
-import { RunDir, type AskpassAnswer } from "./rundir.js"
+import { keysDir, RunDir, writeKey, writeSshAskpass, writeSudoAskpass, type AskpassAnswer } from "./rundir.js"
 import { renderConfig } from "./sshconfig.js"
 import { MachineStore } from "./store.js"
 
@@ -15,16 +15,7 @@ export interface Caller {
   readonly source?: { type: "tool"; messageID: string; id: string }
 }
 
-/** What the plugin supplies to one shell command. */
-export interface Supply {
-  /** Variables to add to that shell's environment. */
-  readonly env: Record<string, string>
-  /** One-line explanations for the agent (denied, declined, missing secrets). */
-  readonly notes: string[]
-  /** Secret values were supplied, so the command's output is masked. */
-  readonly secrets: boolean
-  readonly runDir?: RunDir
-}
+export type { Supply }
 
 /** Machines and env vars on disk, plus the vault, permission table and secret requests. */
 export class MachineService {
@@ -145,7 +136,7 @@ export class MachineService {
           const machine = all.get(id)!.ssh!
           if (machine.auth === "generated") {
             const key = await this.vault.get(id, "ssh-key")
-            if (key) { await runDir.writeKey(id, key); secrets = true }
+            if (key) { await writeKey(runDir, id, key); secrets = true }
             else notes.push(`${id} uses a generated key that does not exist yet: run machine_ssh_keygen.`)
           } else if (machine.auth === "password") {
             const password = await this.vault.get(id, "ssh-password")
@@ -157,12 +148,12 @@ export class MachineService {
           }
         }
         const config = renderConfig(input.machines, {
-          keysDir: runDir.keysDir,
+          keysDir: keysDir(runDir),
           policy: id => ({ ssh: ssh.has(id), x11: x11.has(id), agentForward: agentForward.has(id) }),
         })
         env[SSH_CONFIG_VAR] = await runDir.write("ssh_config", config)
         if (answers.length) {
-          env.SSH_ASKPASS = await runDir.writeSshAskpass(answers)
+          env.SSH_ASKPASS = await writeSshAskpass(runDir, answers)
           env.SSH_ASKPASS_REQUIRE = "force"
         }
       }
@@ -185,7 +176,7 @@ export class MachineService {
         if (id === passwordTarget) env[SUDO_PASSWORD_VAR] = password
         if (references.sudoAskpass && id === local) {
           runDir ??= await RunDir.create(this.runBase)
-          env.SUDO_ASKPASS = await runDir.writeSudoAskpass(password)
+          env.SUDO_ASKPASS = await writeSudoAskpass(runDir, password)
         }
       }
       if (secrets) await this.syncRedactor()

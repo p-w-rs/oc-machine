@@ -1,9 +1,9 @@
 import type { Plugin } from "@opencode/plugin"
-import { guardDirectories, installRedaction, PermissionBridge, pluginDataDir, SECURE_KIT_VERSION, sessionRoots, type PermissionHost } from "oc-secure-kit"
+import { exitCode, guardDirectories, installRedaction, PermissionBridge, pluginDataDir, SECURE_KIT_VERSION, sessionRoots, ShellSupplier, type PermissionHost } from "oc-secure-kit"
 import { createAdmin } from "./admin.js"
 import { defaultEffect } from "./model.js"
 import { MachinesRpc } from "./rpc.js"
-import { NativeShell } from "./nativeshell.js"
+import { SSH_CONFIG_VAR } from "./references.js"
 import { MachineService, PLUGIN_ID } from "./service.js"
 import { createTools, TOOL_NAMES } from "./tools.js"
 
@@ -36,6 +36,13 @@ const warn = (message: string, error?: unknown) =>
   console.warn(`[${PLUGIN_ID}] ${message}${error ? `: ${error instanceof Error ? error.message : String(error)}` : ""}`)
 
 // A plain definition object (Plugin.define is the identity function), so no OpenCode package is loaded at runtime.
+/** When a plain `ssh gpu-2` fails, point at the plugin's config. */
+export function sshTip(command: string, machines: readonly string[]): string | undefined {
+  if (command.includes(SSH_CONFIG_VAR) || !/(?:^|[\s;&|(])(ssh|scp|sftp|rsync)\b/.test(command)) return undefined
+  const ids = machines.filter(id => new RegExp(`(?<![A-Za-z0-9._/-])${id.replace(/[.]/g, "\\.")}(?![A-Za-z0-9._-])`).test(command))
+  return ids.length ? `${ids.join(", ")} ${ids.length > 1 ? "are oc-machine hosts" : "is an oc-machine host"}: use ssh -F "$${SSH_CONFIG_VAR}" ${ids[0]} ...` : undefined
+}
+
 export function createPlugin(): Plugin.Plugin {
   return ({
     id: PLUGIN_ID,
@@ -77,7 +84,11 @@ export function createPlugin(): Plugin.Plugin {
           options.redactAllTools ? "all" : new Set<string>(TOOL_NAMES), error => warn("redaction skipped", error)))
 
         // Values for native shell commands that reference them. Commands that reference nothing are untouched.
-        const shell = new NativeShell(service, warn)
+        const shell = new ShellSupplier({
+          plugin: PLUGIN_ID, redactor: service.redactor, warn,
+          prepare: (command, caller) => service.prepareCommand(command, caller),
+          annotate: (command, result) => exitCode(result) === 0 ? undefined : sshTip(command, service.knownSshMachines()),
+        })
         registrations.push({ dispose: () => shell.dispose() })
         registrations.push(await ctx.tool.hook("execute.before", event => shell.before(event)))
         registrations.push(await ctx.shell.hook("create.before", event => shell.create(event)))
