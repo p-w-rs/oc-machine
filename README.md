@@ -121,18 +121,24 @@ override, then the agent's row, then `*`, then the default.
 
 ## Install
 
+Requires [OpenCode](https://opencode.ai) 2.2.6+ (CLI or Desktop) and [Pixi](https://pixi.sh); macOS or Linux.
+
 ```sh
-pixi run --locked install          # tests, then a verified snapshot under ~/.local/share/oc-machine/releases
-pixi run --locked install-status   # what is active, and whether its files are intact
-pixi run --locked rollback         # back to the previous snapshot (or dev link)
-pixi run --locked uninstall        # removes only this plugin's config entry; data and snapshots stay
+git clone https://github.com/p-w-rs/oc-machine.git && cd oc-machine
+pixi run --locked install          # runs the tests, then installs a verified snapshot into your OpenCode config
 ```
 
-Each install edits `~/.config/opencode/opencode.json(c)` with a backup next to
-it, keeps comments, other plugins and this plugin's `options`, and refuses to
-write if the result does not parse as expected. Snapshots record a SHA-256 of
-every file; a modified snapshot is never activated. The newest three (plus the
-current and previous) are kept.
+Restart OpenCode (or `/reload`). Then open **Settings → Machines** (or `/machines` in a session).
+Agents can also set things up for you when you ask.
+
+```sh
+pixi run --locked install-status   # what is installed, and whether its files are intact
+pixi run --locked rollback         # back to the previous snapshot
+pixi run --locked uninstall        # removes only this plugin's entry; your data stays
+```
+
+Updating: `git pull && pixi run --locked install`. Your accounts, sign-ins and permissions live in
+`~/.local/share/oc-machine` and survive updates; move them between computers with **Export** / **Import** in the view.
 
 ## Development
 

@@ -1,10 +1,18 @@
 {
   "name": "oc-machine",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
   "description": "Machines for OpenCode: SSH config, sudo, env vars and a per-agent permission table",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/p-w-rs/oc-machine.git"
+  },
+  "homepage": "https://github.com/p-w-rs/oc-machine#readme",
+  "bugs": {
+    "url": "https://github.com/p-w-rs/oc-machine/issues"
+  },
   "exports": {
     ".": "./plugin/index.ts",
     "./gui-experimental": "./dist/gui-experimental.cjs"
@@ -38,7 +46,7 @@
   },
   "dependencies": {
     "jsonc-parser": "3.3.1",
-    "oc-secure-kit": "file:vendor/oc-secure-kit-0.5.1.tgz"
+    "oc-secure-kit": "file:vendor/oc-secure-kit-1.0.0.tgz"
   },
   "devDependencies": {
     "@opencode/plugin": "2.2.6",
