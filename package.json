@@ -1,6 +1,6 @@
 {
   "name": "oc-machine",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
@@ -46,7 +46,7 @@
   },
   "dependencies": {
     "jsonc-parser": "3.3.1",
-    "oc-secure-kit": "file:vendor/oc-secure-kit-1.0.1.tgz"
+    "oc-secure-kit": "file:vendor/oc-secure-kit-1.0.2.tgz"
   },
   "devDependencies": {
     "@opencode/plugin": "2.2.6",
