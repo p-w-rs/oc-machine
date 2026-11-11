@@ -32,7 +32,7 @@ type Effect = "allow" | "ask" | "deny"
 type Tool = { name: string; description: string; execute: (input: unknown, context: unknown) => Promise<{ content: string }> }
 
 /** A minimal OpenCode 2.2.6 host: permission evaluation, tool registry with reload, tool and shell hooks. */
-async function host(options: Record<string, unknown> = {}, reply: "approve" | "reject" = "approve") {
+async function host(options: Record<string, unknown> = {}, reply: "approve" | "reject" | "reject-silent" = "approve") {
   const dir = await mkdtemp(join(tmpdir(), "oc-machine-"))
   dirs.push(dir)
   const hooks = { evaluate: [] as any[], before: [] as any[], after: [] as any[], shell: [] as any[] }
@@ -53,6 +53,7 @@ async function host(options: Record<string, unknown> = {}, reply: "approve" | "r
         if (event.effect === "ask") {
           prompts.push({ action: input.action, resources: input.resources, metadata: input.metadata })
           if (reply === "reject") throw new Error("rejected by user")
+          if (reply === "reject-silent") throw new Error("")
         }
       },
     },
@@ -221,6 +222,12 @@ test("the table governs env vars per agent and session, with native prompts for 
   await (await rejecting.policy()).setCells([{ entity: "env:T", row: { agent: "*" }, capability: "use", effect: "ask" }])
   const declined = await rejecting.shell('echo "[$T]"')
   assert.equal(declined.text, "[]\n[oc-machine] $T: use not granted (rejected by user).")
+  // OpenCode Desktop rejects with an empty message: the note still says why.
+  const silent = await host({}, "reject-silent")
+  await silent.call("machine_env_set", { name: "T", description: "token", secret: true })
+  await (await silent.vault()).set("env:T", "value", "t-value-123")
+  await (await silent.policy()).setCells([{ entity: "env:T", row: { agent: "*" }, capability: "use", effect: "ask" }])
+  assert.equal((await silent.shell('echo "[$T]"')).text, "[]\n[oc-machine] $T: use not granted (declined in the permission prompt).")
 })
 
 test("ssh from the native shell works with a passphrase-protected key", async () => {

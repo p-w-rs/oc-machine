@@ -79,7 +79,7 @@ export class MachineService {
         await this.bridge.check({ ...caller, capability, entities: group, ...(metadata && { metadata }) })
         for (const entity of group) granted.add(entity)
       } catch (error) {
-        notes.push(`${group.map(what).join(", ")}: ${capability} not granted (${(error as Error).message.split("\n")[0]}).`)
+        notes.push(`${group.map(what).join(", ")}: ${capability} not granted (${(error as Error)?.message?.split("\n")[0]?.trim() || "declined in the permission prompt"}).`)
       }
     }
     return granted
