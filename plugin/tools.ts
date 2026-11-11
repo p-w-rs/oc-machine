@@ -32,7 +32,7 @@ const SSH_SCHEMA = {
     user: { type: "string" },
     port: { type: "integer", minimum: 1, maximum: 65535 },
     proxyJump: { type: "string", description: "Another machine ID or [user@]host[:port]; comma-separated for chains" },
-    auth: { type: "string", enum: ["agent", "key", "password", "generated"], description: "agent: ssh-agent / 1Password / Secretive; key: a key file (optional passphrase secret); password: the user enters it; generated: a per-machine key from machine_ssh_keygen" },
+    auth: { type: "string", enum: ["agent", "key", "password", "generated"], description: "New machines: start with password (the user enters the machine's password once as its sudo secret; it also logs in), then machine_ssh_keygen installs a dedicated key and switches to generated. agent: ssh-agent / 1Password / Secretive; key: an existing key file" },
     identityFile: { type: "string", description: "Private key path for auth=key (~ allowed)" },
     identityAgent: { type: "string", description: "Agent socket for auth=agent, if not $SSH_AUTH_SOCK" },
     forwardX11: { type: "boolean" },
@@ -137,7 +137,7 @@ export function createTools(service: MachineService): ToolDefinition[] {
     },
     {
       name: "machine_upsert",
-      description: () => "Create or update a machine (fields merge; null clears one). Set local=true for the computer OpenCode runs on (used for sudo -A). SSH settings are validated with ssh -G before saving. Never pass secrets here: use machine_request_secret.",
+      description: () => "Create or update a machine (fields merge; null clears one). Set local=true for the computer OpenCode runs on (used for sudo -A). SSH settings are validated with ssh -G before saving. Never pass secrets here: use machine_request_secret. Adding a new remote machine: 1) machine_upsert with auth=password (plus routes/reachability if it has several addresses or is only reachable from some networks); 2) machine_request_secret slot=sudo (the user's password on that machine; also used to log in); 3) machine_ssh_keygen (installs a dedicated key, switches to it); 4) machine_test; 5) ask the user to review its permissions in Settings > Machines.",
       input: {
         type: "object",
         properties: {
@@ -178,8 +178,11 @@ export function createTools(service: MachineService): ToolDefinition[] {
         if (local === false && (await service.store.localMachine()) === saved.id) await service.store.setLocal(undefined)
         const secrets = await service.machineSecretStatus(saved)
         const next: string[] = []
-        if (secrets["ssh-password"] === "unset") next.push(`ask the user for the ssh password (machine_request_secret id=${saved.id} slot=ssh-password)`)
+        // Setup: one password (sudo, also used to log in) -> a dedicated key installed with it -> permissions.
+        if (saved.ssh?.auth === "password" && secrets["ssh-password"] === "unset" && secrets.sudo === "unset") next.push(`ask the user for the machine's password (machine_request_secret id=${saved.id} slot=sudo; it is the sudo password and is also used to log in until the key is installed)`)
+        if (saved.ssh && saved.ssh.auth !== "generated" && (saved.ssh.auth !== "password" || secrets.sudo === "set" || secrets["ssh-password"] === "set")) next.push(`install a dedicated key: machine_ssh_keygen id=${saved.id}`)
         if (secrets["ssh-key"] === "unset") next.push(`create the key with machine_ssh_keygen id=${saved.id}`)
+        if (next.length) next.push("then machine_test, and tell the user to review this machine's permissions in Settings > Machines (sudo asks by default)")
         return json({
           saved, local: (await service.store.localMachine()) === saved.id, secrets,
           ...(next.length && { next: next.join("; ") }),

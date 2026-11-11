@@ -139,9 +139,10 @@ export class MachineService {
             if (key) { await writeKey(runDir, id, key); secrets = true }
             else notes.push(`${id} uses a generated key that does not exist yet: run machine_ssh_keygen.`)
           } else if (machine.auth === "password") {
-            const password = await this.vault.get(id, "ssh-password")
+            // The login password is almost always the sudo password: one secret covers both unless a separate one is set.
+            const password = await this.vault.get(id, "ssh-password") ?? await this.vault.get(id, "sudo")
             if (password) { answers.push({ kind: "password", match: machine.host, value: password }); secrets = true }
-            else notes.push(`${id}'s ssh password is not set: ask the user (machine_request_secret id=${id} slot=ssh-password).`)
+            else notes.push(`${id} has no password yet: ask the user for it (machine_request_secret id=${id} slot=sudo; it is also used to log in).`)
           } else if (machine.auth === "key") {
             const passphrase = await this.vault.get(id, "key-passphrase")
             if (passphrase) { answers.push({ kind: "passphrase", match: machine.identityFile!, value: passphrase }); secrets = true }

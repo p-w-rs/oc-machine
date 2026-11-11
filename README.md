@@ -87,6 +87,15 @@ except for commands it supplied values to (masking + notes) and a usage tip
 when a plain `ssh <configured-machine>` fails. If anything goes wrong inside
 the plugin, it skips its own part and OpenCode carries on.
 
+## Adding a machine
+
+1. `machine_upsert` with `auth: "password"` (and `routes` / `reachability` if needed, see above).
+2. You enter the machine's password once as its **sudo** secret (Settings → Machines). It is also used to log in;
+   set a separate `ssh-password` only if the two differ.
+3. `machine_ssh_keygen` creates a dedicated ed25519 key for OpenCode, installs it with that password, and switches
+   the machine to it. The private key stays encrypted in the vault.
+4. `machine_test`, then review the machine's row in the permission table (sudo asks by default).
+
 ## Setup tools (the agent calls these)
 
 | Tool | |

@@ -302,7 +302,15 @@ test("sudo: $OCM_SUDO_PASSWORD and sudo -A are supplied for the right machine an
 test("agent-managed setup: request secrets, rename, remove", async () => {
   const h = await host()
   const created = await h.call("machine_upsert", { id: "gpu", label: "GPU", ssh: { host: "10.0.0.7", auth: "password", forwardX11: true } })
-  assert.match(created.next, /ssh password/)
+  assert.match(created.next, /machine_request_secret id=gpu slot=sudo.*also used to log in/)
+  assert.match(created.next, /review this machine's permissions/)
+  // One password covers login and sudo: with only the sudo secret set, ssh gets it as the login password.
+  await (await h.vault()).set("gpu", "sudo", "same-password")
+  const login = await h.shell('ssh -F "$OCM_SSH_CONFIG" -o ConnectTimeout=1 gpu true')
+  assert.ok(login.env.SSH_ASKPASS, "the sudo password is offered as the login password")
+  assert.doesNotMatch(login.text, /has no password yet/)
+  assert.match((await h.call("machine_upsert", { id: "gpu", label: "GPU" })).next, /machine_ssh_keygen id=gpu/)
+  await (await h.vault()).delete("gpu", "sudo")
   const requested = await h.call("machine_request_secret", { id: "gpu", slot: "ssh-password", purpose: "first login" })
   assert.equal(requested.status, "unset")
   await h.call("machine_env_set", { name: "TOKEN", description: "API token", secret: true })
