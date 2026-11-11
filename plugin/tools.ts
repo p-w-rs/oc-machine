@@ -350,7 +350,7 @@ export function createTools(service: MachineService): ToolDefinition[] {
         const machine = await requireMachine(input.id)
         if (!machine.ssh) throw new Error(`${machine.id} has no ssh settings`)
         const started = Date.now()
-        const result = await pluginSsh(context, machine.id, "uname -sm; id -un; hostname", "connection test")
+        const result = await pluginSsh(context, machine.id, "uname -sm; id -un; uname -n", "connection test")
         if (!result.ok) {
           const error: string = ("error" in result ? result.error : result.stderr) || `ssh exited ${result.code}`
           const hint = unreachableHint(error, machine)
