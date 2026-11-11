@@ -6,7 +6,7 @@ import { inventory, USAGE } from "./inventory.js"
 import { SSH_CONFIG_VAR } from "./references.js"
 import type { Caller, MachineService } from "./service.js"
 import { RunDir } from "./rundir.js"
-import { renderHost, runSsh, validateConfig } from "./sshconfig.js"
+import { renderHost, runSsh, unreachableHint, validateConfig } from "./sshconfig.js"
 
 export const TOOL_NAMES = [
   "machine_list", "machine_get", "machine_upsert", "machine_remove", "machine_env_set", "machine_env_remove",
@@ -42,6 +42,12 @@ const SSH_SCHEMA = {
     remoteForwards: { type: "array", items: { type: "string" } },
     serverAliveInterval: { type: "integer", minimum: 0, maximum: 3600 },
     options: { type: "object", additionalProperties: { type: "string" }, description: "Other ssh_config options, e.g. {\"Compression\":\"yes\"}" },
+    routes: {
+      type: "array", maxItems: 8,
+      description: "Preferred alternative addresses, tried in order before host/port (e.g. a home-LAN address with host = the public address). Each is used only if it answers within 1 s, and with network only while this computer is on that network.",
+      items: { type: "object", properties: { host: { type: "string" }, port: { type: "integer", minimum: 1, maximum: 65535 }, network: { type: "string", description: "CIDR this computer must be on, e.g. 192.168.0.0/24" } }, required: ["host"], additionalProperties: false },
+    },
+    reachability: { type: "string", description: "Where the machine can be reached from, e.g. \"office Wi-Fi or work VPN\"; shown when a connection fails" },
   },
 } as const
 
@@ -345,7 +351,11 @@ export function createTools(service: MachineService): ToolDefinition[] {
         if (!machine.ssh) throw new Error(`${machine.id} has no ssh settings`)
         const started = Date.now()
         const result = await pluginSsh(context, machine.id, "uname -sm; id -un; hostname", "connection test")
-        if (!result.ok) return json({ machine: machine.id, ok: false, error: "error" in result ? result.error : result.stderr || `ssh exited ${result.code}`, ...("notes" in result && result.notes?.length && { notes: result.notes }) })
+        if (!result.ok) {
+          const error: string = ("error" in result ? result.error : result.stderr) || `ssh exited ${result.code}`
+          const hint = unreachableHint(error, machine)
+          return json({ machine: machine.id, ok: false, error, ...(hint && { hint }), ...("notes" in result && result.notes?.length && { notes: result.notes }) })
+        }
         const [system, user, host] = result.stdout.split("\n")
         return json({ machine: machine.id, ok: true, system, user, hostname: host, ms: Date.now() - started, ...(result.notes?.length && { notes: result.notes }) })
       },

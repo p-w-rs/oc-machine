@@ -36,6 +36,21 @@ export interface SshConfig {
   readonly serverAliveInterval?: number
   /** Any other ssh_config options, e.g. `{ "Compression": "yes" }`. */
   readonly options?: Readonly<Record<string, string>>
+  /**
+   * Preferred routes, tried in order before `host`/`port`: each is used when its address answers within a second
+   * (and, with `network`, only while this computer has an address in that CIDR range, e.g. a home LAN). All routes
+   * reach the same machine, so they share one known-hosts entry.
+   */
+  readonly routes?: readonly SshRoute[]
+  /** Where the machine can be reached from, e.g. "office network or work VPN". Shown when it cannot be reached. */
+  readonly reachability?: string
+}
+
+export interface SshRoute {
+  readonly host: string
+  readonly port?: number
+  /** CIDR, e.g. 192.168.0.0/24: only try this route while on that network. */
+  readonly network?: string
 }
 
 export interface Machine {
@@ -86,6 +101,7 @@ export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 const MACHINE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const JUMP = /^(?:[A-Za-z0-9_][A-Za-z0-9_.@-]{0,63}@)?[A-Za-z0-9.:\[\]%_-]+(?::\d{1,5})?$/
 const FORWARD = /^(?:(?:\[[^\]\s]+\]|[A-Za-z0-9.*_-]+):)?\d{1,5}[: ](?:\[[^\]\s]+\]|[A-Za-z0-9._-]+):\d{1,5}$|^\/[^\s]+ \/[^\s]+$/
+const CIDR = /^(?:\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}|[0-9A-Fa-f:]+\/\d{1,3})$/
 const OPTION_NAME = /^[A-Za-z][A-Za-z0-9]{1,63}$/
 const PUBLIC_KEY = /^ssh-ed25519 [A-Za-z0-9+/]+={0,2}( [^\r\n']{0,200})?$/
 /** Names reserved for the plugin's own shell references. */
@@ -129,7 +145,7 @@ export function normalizeSsh(input: unknown, machineId: string): SshConfig {
   if (!input || typeof input !== "object" || Array.isArray(input)) return fail("ssh must be an object")
   const raw = input as Record<string, unknown>
   const known = new Set(["host", "user", "port", "proxyJump", "auth", "identityFile", "identityAgent", "forwardX11", "forwardX11Trusted",
-    "forwardAgent", "localForwards", "remoteForwards", "serverAliveInterval", "options"])
+    "forwardAgent", "localForwards", "remoteForwards", "serverAliveInterval", "options", "routes", "reachability"])
   for (const key of Object.keys(raw)) if (!known.has(key)) fail(`Unknown ssh field ${JSON.stringify(key)}`)
   const host = text(raw.host, "ssh.host", 253) ?? fail("ssh.host is required")
   if (!HOST.test(host)) fail(`ssh.host ${JSON.stringify(host)} is not a hostname or IP address`)
@@ -176,6 +192,22 @@ export function normalizeSsh(input: unknown, machineId: string): SshConfig {
     }
     if (Object.keys(options).length > 64) fail("ssh.options has too many entries")
   }
+  let routes: SshRoute[] | undefined
+  if (raw.routes !== undefined && raw.routes !== null) {
+    if (!Array.isArray(raw.routes) || raw.routes.length > 8) fail("ssh.routes must be a list of up to 8 routes")
+    routes = (raw.routes as unknown[]).map((item, index) => {
+      const field = `ssh.routes[${index}]`
+      if (!item || typeof item !== "object" || Array.isArray(item)) fail(`${field} must be an object { host, port?, network? }`)
+      const route = item as Record<string, unknown>
+      for (const key of Object.keys(route)) if (!["host", "port", "network"].includes(key)) fail(`Unknown ${field} field ${JSON.stringify(key)}`)
+      const routeHost = text(route.host, `${field}.host`, 253) ?? fail(`${field}.host is required`)
+      if (!HOST.test(routeHost) || routeHost.includes("%")) fail(`${field}.host ${JSON.stringify(routeHost)} is not a hostname or IP address`)
+      const network = text(route.network, `${field}.network`, 64)
+      if (network !== undefined && !CIDR.test(network)) fail(`${field}.network ${JSON.stringify(network)} must be a CIDR range like 192.168.0.0/24`)
+      return { host: routeHost, ...(route.port !== undefined && route.port !== null && { port: port(route.port, `${field}.port`) }), ...(network !== undefined && { network }) }
+    })
+  }
+  const reachability = text(raw.reachability, "ssh.reachability", 200)
   const forwardX11 = flag(raw.forwardX11, "ssh.forwardX11")
   const forwardX11Trusted = flag(raw.forwardX11Trusted, "ssh.forwardX11Trusted")
   const forwardAgent = flag(raw.forwardAgent, "ssh.forwardAgent")
@@ -193,6 +225,8 @@ export function normalizeSsh(input: unknown, machineId: string): SshConfig {
     ...(remoteForwards?.length && { remoteForwards }),
     ...(interval !== undefined && interval !== null && { serverAliveInterval: interval as number }),
     ...(options && Object.keys(options).length && { options }),
+    ...(routes?.length && { routes }),
+    ...(reachability !== undefined && { reachability }),
   }
 }
 

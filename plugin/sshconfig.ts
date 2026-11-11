@@ -15,6 +15,13 @@ export interface RenderOptions {
   /** Directory holding materialized generated keys (`<keysDir>/<id>`) for this command. */
   readonly keysDir: string
   readonly policy: (machineId: string) => SshPolicy
+  /** ssh understands `Match localnetwork` (OpenSSH 9.4+); without it, routes rely on the reachability probe alone. */
+  readonly localNetwork?: boolean
+}
+
+/** A one-second TCP check, used by `Match exec` to pick a route (macOS nc needs -G; without nc, bash /dev/tcp). */
+export function probeCommand(host: string, port: number): string {
+  return `if command -v nc >/dev/null 2>&1; then if [ $(uname) = Darwin ]; then nc -z -G 1 -w 1 ${host} ${port}; else nc -z -w 1 ${host} ${port}; fi; else timeout 1 bash -c '</dev/tcp/${host}/${port}'; fi >/dev/null 2>&1`
 }
 
 function quote(value: string): string {
@@ -29,8 +36,15 @@ export function renderHost(machine: Machine, all: ReadonlyMap<string, Machine>, 
   if (!ssh) return undefined
   const policy = options.policy(machine.id)
   if (!policy.ssh) return undefined
-  const lines: string[] = [`# ${machine.label ? machine.label.replace(/[\r\n]/g, " ") : machine.id}`, `Host ${machine.id}`]
+  const lines: string[] = [`# ${machine.label ? machine.label.replace(/[\r\n]/g, " ") : machine.id}${ssh.reachability ? ` (reachable from: ${ssh.reachability.replace(/[\r\n]/g, " ")})` : ""}`]
+  // Preferred routes first: ssh keeps the first value it sees, so a matching route's HostName/Port win.
+  for (const route of ssh.routes ?? []) {
+    const network = route.network && options.localNetwork !== false ? ` localnetwork ${route.network}` : ""
+    lines.push(`Match originalhost ${machine.id}${network} exec "${probeCommand(route.host, route.port ?? 22)}"`, `  HostName ${route.host}`, `  Port ${route.port ?? 22}`)
+  }
+  lines.push(`Host ${machine.id}`)
   const set = (name: string, value: string | number | undefined) => { if (value !== undefined) lines.push(`  ${name} ${quote(String(value))}`) }
+  const custom = new Set(Object.keys(ssh.options ?? {}).map(name => name.toLowerCase()))
   set("HostName", ssh.host)
   set("User", ssh.user)
   set("Port", ssh.port)
@@ -66,6 +80,10 @@ export function renderHost(machine: Machine, all: ReadonlyMap<string, Machine>, 
   for (const forward of ssh.remoteForwards ?? []) lines.push(`  RemoteForward ${forward.replace(/:(?=[^:]+:\d+$)/, " ")}`)
   set("ServerAliveInterval", ssh.serverAliveInterval)
   for (const [name, value] of Object.entries(ssh.options ?? {})) set(name, value)
+  // Every route reaches the same machine: one host key entry, so a wrong machine on a route is still rejected.
+  if (ssh.routes?.length && !custom.has("hostkeyalias")) set("HostKeyAlias", machine.id)
+  // Fail fast when the machine is out of reach (VPN off, other network) instead of ssh's long default.
+  if (!custom.has("connecttimeout")) set("ConnectTimeout", 10)
   // Agents cannot answer ssh's interactive yes/no for a new host; trust on first use, still reject changed keys.
   if (!Object.keys(ssh.options ?? {}).some(name => name.toLowerCase() === "stricthostkeychecking")) set("StrictHostKeyChecking", "accept-new")
   return lines.join("\n")
@@ -140,4 +158,15 @@ export async function validateConfig(text: string, hosts: readonly string[], ssh
     }
     return resolved
   } finally { await rm(dir, { recursive: true, force: true }) }
+}
+
+const UNREACHABLE = /timed out|Operation timed out|No route to host|Network is unreachable|Could not resolve hostname|nodename nor servname|Name or service not known|Connection refused/i
+
+/** A hint when ssh could not reach a machine that is only reachable from some networks. */
+export function unreachableHint(output: string, machine: Machine): string | undefined {
+  if (!UNREACHABLE.test(output)) return undefined
+  const ssh = machine.ssh
+  if (ssh?.reachability) return `${machine.id} could not be reached. It is only reachable from: ${ssh.reachability}. Ask the user to connect (e.g. the VPN), then retry; don't change its settings.`
+  if (ssh?.routes?.length) return `${machine.id} could not be reached on any route (${[...ssh.routes.map(route => route.host), ssh.host].join(", ")}). The machine may be off or this network blocked; ask the user.`
+  return undefined
 }

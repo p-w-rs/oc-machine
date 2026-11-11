@@ -22,7 +22,8 @@ export function inventory(machines: readonly Machine[], env: readonly EnvVar[], 
     lines.push("Machines:")
     for (const machine of machines.slice(0, MAX_MACHINES)) {
       const how = machine.id === localMachine ? "this computer" : machine.ssh ? "ssh" : "no ssh"
-      lines.push(`  ${machine.id} (${machine.os}, ${how})${machine.label ? ` ${clip(machine.label, 60)}` : ""}`)
+      const reach = machine.ssh?.reachability ? `; only from ${clip(machine.ssh.reachability, 60)}` : machine.ssh?.routes?.length ? "; picks the nearest route" : ""
+      lines.push(`  ${machine.id} (${machine.os}, ${how}${machine.id === localMachine ? "" : reach})${machine.label ? ` ${clip(machine.label, 60)}` : ""}`)
     }
     if (machines.length > MAX_MACHINES) lines.push(`  …and ${machines.length - MAX_MACHINES} more (machine_list)`)
   }

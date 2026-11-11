@@ -60,6 +60,19 @@ The agent then just writes normal shell commands:
 | `printf '%s\n' "$OCM_SUDO_PASSWORD" \| ssh -F "$OCM_SSH_CONFIG" gpu-2 "sudo -S -p '' cmd"` | remote sudo password |
 | `sudo -A cmd` | local sudo password (`SUDO_ASKPASS`) |
 
+### Machines with more than one address, or only reachable from some networks
+
+- **`ssh.routes`**: preferred addresses tried in order before `ssh.host`, e.g. a home server reached directly on
+  the home LAN and through a router port forward everywhere else:
+  `{ host: "ssh.example.org", port: 49222, routes: [{ host: "192.168.0.80", network: "192.168.0.0/24" }] }`.
+  A route is used when its address answers within one second (and, with `network`, only while this computer is on
+  that network; needs OpenSSH 9.4+). All routes share one known-hosts entry, so a different machine answering on a
+  route is still rejected.
+- **`ssh.reachability`**: where a private machine can be reached from, e.g. "office Wi-Fi or work VPN". It shows in
+  the inventory, and when ssh cannot reach the machine the agent is told to ask you to connect instead of
+  changing settings.
+- Every machine gets `ConnectTimeout 10`, so an unreachable machine fails in seconds (override in `ssh.options`).
+
 A command that references none of these runs exactly as in plain OpenCode.
 A value that is denied or declined is simply not supplied; the command still
 runs and its result gets a one-line `[oc-machine]` note saying why. Secret
